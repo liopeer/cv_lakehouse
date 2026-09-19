@@ -14,6 +14,7 @@ output [
     data_type: TYPE_FP32
     dims: [ 512 ]
   }
+]
 ensemble_scheduling {
   step [
     {
@@ -23,7 +24,7 @@ ensemble_scheduling {
       output_map { key: "images" value: "preprocessed_images" }
     },
     {
-      model_name: "_mobileclip_s0_image_backend_trt"
+      model_name: "_mobileclip_s0_image_backend"
       model_version: -1
       input_map { key: "images" value: "preprocessed_images" }
       output_map { key: "embeddings" value: "embeddings" }

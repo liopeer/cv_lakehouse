@@ -1,0 +1,13 @@
+# The Python packages of the ROCm image. `make lock` compiles this file into
+# requirements-rocm.txt, which the image installs. shared_deps installs on its own.
+
+# The version in the tritonserver base image, which the Python backend uses.
+numpy==1.26.4
+open-clip-torch>=2.20
+timm>=0.9.5
+# The wheels built for ROCm 7.2, which the base image runs.
+torch==2.14.0+rocm7.2
+torchvision==0.29.0+rocm7.2
+onnx>=1.16
+onnxscript>=0.1
+huggingface_hub>=0.34

@@ -1,0 +1,15 @@
+# The Python packages of the CUDA image. `make lock` compiles this file into
+# requirements-cuda.txt, which the image installs. shared_deps installs on its own.
+
+# The version in the tritonserver base image, which DALI and the Python backend use.
+numpy==1.26.4
+open-clip-torch>=2.20
+timm>=0.9.5
+# The CUDA 12.6 wheels.
+torch==2.14.0+cu126
+torchvision==0.29.0+cu126
+onnx>=1.16
+onnxscript>=0.1
+# The TensorRT that Triton 25.03 runs the engines with.
+tensorrt-cu12==10.9.0.34
+huggingface_hub>=0.34

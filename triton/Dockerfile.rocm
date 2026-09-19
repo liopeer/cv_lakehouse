@@ -1,0 +1,64 @@
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# The ROCm image. AMD's Triton build has the ONNX Runtime and Python backends, but no
+# TensorRT and no DALI. ONNX Runtime runs the encoders through its MIGraphX execution
+# provider. A Python model decodes JPEGs on the GPU with rocJPEG and resizes them with
+# torchvision.
+#
+# The image holds no weights. `entrypoint.sh` exports both encoders to ONNX on the first
+# start and caches them in /cache, together with the programs that MIGraphX compiles.
+ARG BASE_IMAGE=rocm/tritoninferenceserver:tritoninferenceserver-25.12.amd1_rocm7.2_ubuntu24.04_py3.12@sha256:40bf1442e40469f2a0be699e7965f40fb53c9e98a085ce97137bb65981dbccac
+
+# rocjpeg needs mesa-amdgpu-va-drivers, which ROCm 7 publishes in its graphics repository.
+FROM ${BASE_IMAGE} AS base
+
+RUN echo "deb [arch=amd64] https://repo.radeon.com/graphics/7.2/ubuntu noble main" \
+    > /etc/apt/sources.list.d/amdgpu-graphics.list
+
+# rocPyDecode publishes no package, so it builds from source. It has no release tag.
+FROM base AS rocpydecode
+
+ARG ROCPYDECODE_COMMIT=e387d1cd6637d9391b6a8409a6916d70ee04cc9c
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake git rocjpeg-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git init /src/rocPyDecode \
+    && cd /src/rocPyDecode \
+    && git fetch --depth 1 https://github.com/ROCm/rocPyDecode.git "${ROCPYDECODE_COMMIT}" \
+    && git checkout FETCH_HEAD \
+    && cmake -S jpegDecode -B build \
+        -DCMAKE_INSTALL_PREFIX=/opt/rocpydecode \
+        -DPYTHON_VERSION_SUGGESTED=3.12 \
+    && cmake --build build --parallel \
+    && cmake --install build
+
+FROM base
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends rocjpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=rocpydecode /opt/rocpydecode /opt/rocpydecode
+ENV PYTHONPATH=/opt/rocpydecode/lib
+
+WORKDIR /opt/mobileclip
+
+# requirements-rocm.txt pins every package with its hash, and `make lock` writes it.
+# shared_deps goes in on its own with --no-deps, which skips pillow-simd. The image
+# models decode without PIL, and only the fallback for a non-JPEG image uses torchvision.
+COPY requirements-rocm.txt /opt/mobileclip/
+RUN pip install --no-cache-dir --no-deps --require-hashes -r requirements-rocm.txt
+COPY shared_deps_server/ /opt/mobileclip/shared_deps_server/
+RUN pip install --no-cache-dir --no-deps ./shared_deps_server/
+
+COPY model_repository/common/ model_repository/rocm/ /models/
+COPY entrypoint.sh version.txt /opt/mobileclip/
+
+ENV TRITON_PLATFORM=rocm
+
+ENTRYPOINT ["/opt/rocm/rocm_entrypoint.sh", "/opt/mobileclip/entrypoint.sh"]

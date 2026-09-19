@@ -58,22 +58,29 @@ jobs:
           cache-from: type=gha,scope=app
           cache-to: type=gha,scope=app,mode=max
 
-  # The tritonserver base is about 15 GB, so this runs only when `triton/` changes. The
-  # image is larger than the 10 GB gha cache, so it builds without one.
+  # The tritonserver bases are about 20 GB, so this runs only when `triton/` changes. The
+  # images are larger than the 10 GB gha cache, so they build without one.
   triton-image:
     needs: changes
     if: needs.changes.outputs.triton == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [cuda, rocm]
     steps:
+      # The ROCm image is about 40 GB, because the ROCm build of torch brings its own
+      # copy of the ROCm libraries. It needs the large packages gone as well.
       - uses: jlumbroso/free-disk-space@v2
         with:
-          large-packages: false
+          large-packages: ${{ matrix.platform == 'rocm' }}
       - uses: actions/checkout@v7
       - uses: docker/build-push-action@v7
         with:
           context: triton
+          file: triton/Dockerfile.${{ matrix.platform }}
           push: false
           outputs: type=cacheonly
           provenance: false

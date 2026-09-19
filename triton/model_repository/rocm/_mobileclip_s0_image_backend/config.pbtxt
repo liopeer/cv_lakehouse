@@ -1,0 +1,39 @@
+name: "_mobileclip_s0_image_backend"
+backend: "onnxruntime"
+max_batch_size: 64
+dynamic_batching {
+  preferred_batch_size: [ 64 ]
+}
+input [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [ 3, 256, 256 ]
+  }
+]
+output [
+  {
+    name: "embeddings"
+    data_type: TYPE_FP32
+    dims: [ 512 ]
+  }
+]
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]
+# MIGraphX compiles one program for each power of two up to migraphx_max_dynamic_batch
+# when the model loads, and pads a batch to the next one. The compile time doubles with
+# each step, so 256 takes hours on the first start. 64 takes minutes.
+optimization {
+  execution_accelerators {
+    gpu_execution_accelerator: [
+      {
+        name: "migraphx"
+        parameters { key: "migraphx_max_dynamic_batch" value: "64" }
+      }
+    ]
+  }
+}

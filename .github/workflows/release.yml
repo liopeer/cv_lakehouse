@@ -110,6 +110,8 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=app
 
+  # One image for each GPU platform, in one package. The platform is a tag suffix, such
+  # as `X.Y.Z-rocm`.
   triton-image:
     needs: [release-please, verify]
     if: needs.release-please.outputs.triton == 'true'
@@ -117,16 +119,22 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [cuda, rocm]
     env:
       IMAGE: ghcr.io/${{ github.repository }}-triton
       VERSION: ${{ needs.release-please.outputs.triton-version }}
       MAJOR: ${{ needs.release-please.outputs.triton-major }}
       MINOR: ${{ needs.release-please.outputs.triton-minor }}
     steps:
-      # The tritonserver base is about 15 GB, more than a runner has free.
+      # The tritonserver bases are about 20 GB, more than a runner has free.
+      # The ROCm image is about 40 GB, because the ROCm build of torch brings its own
+      # copy of the ROCm libraries. It needs the large packages gone as well.
       - uses: jlumbroso/free-disk-space@v2
         with:
-          large-packages: false
+          large-packages: ${{ matrix.platform == 'rocm' }}
 
       - uses: actions/checkout@v7
         with:
@@ -141,13 +149,14 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: triton
+          file: triton/Dockerfile.${{ matrix.platform }}
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ env.VERSION }}
-            ${{ env.IMAGE }}:${{ env.MAJOR }}.${{ env.MINOR }}
-            ${{ env.IMAGE }}:${{ env.MAJOR }}
+            ${{ env.IMAGE }}:${{ env.VERSION }}-${{ matrix.platform }}
+            ${{ env.IMAGE }}:${{ env.MAJOR }}.${{ env.MINOR }}-${{ matrix.platform }}
+            ${{ env.IMAGE }}:${{ env.MAJOR }}-${{ matrix.platform }}
           labels: |
-            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.version=${{ env.VERSION }}-${{ matrix.platform }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=MIT
