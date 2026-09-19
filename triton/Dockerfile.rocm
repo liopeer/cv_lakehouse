@@ -17,8 +17,8 @@ WORKDIR /opt/mobileclip
 
 # requirements-rocm.txt pins every package with its hash, and `make lock` writes it. It
 # leaves out the packages of the base image. shared_deps goes in on its own with
-# --no-deps, which skips pillow-simd. The image models decode without PIL, and only the
-# fallback for a non-JPEG image uses torchvision.
+# --no-deps, which skips pillow-simd. The CPU fallback of the image decoder uses the
+# pillow of the base image.
 COPY requirements-rocm.txt /opt/mobileclip/
 RUN pip3 install --no-cache-dir --no-deps --require-hashes -r requirements-rocm.txt
 COPY shared_deps_server/ /opt/mobileclip/shared_deps_server/

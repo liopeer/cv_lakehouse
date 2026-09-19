@@ -10,9 +10,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from io import BytesIO
 
+import numpy as np
 import torch
-from torchvision.io import ImageReadMode, decode_image
+from PIL import Image
 from torchvision.transforms.v2 import InterpolationMode
 from torchvision.transforms.v2 import functional as F
 
@@ -33,7 +35,7 @@ class MobileCLIPImageDecoder:
 
     Sequential JPEGs go to rocJPEG on the GPU when `use_rocjpeg` is set. Other images,
     such as a PNG or a progressive JPEG, and the JPEGs that rocJPEG rejects fall back to
-    torchvision on the CPU.
+    PIL on the CPU. AMD's torchvision for ROCm has no libjpeg.
     """
 
     def __init__(self, *, device: torch.device, use_rocjpeg: bool) -> None:
@@ -90,8 +92,9 @@ class MobileCLIPImageDecoder:
         return _convert_rocjpeg_image(decoded)
 
     def _decode_on_cpu(self, encoded: bytes) -> torch.Tensor:
-        data = torch.frombuffer(bytearray(encoded), dtype=torch.uint8)
-        return decode_image(data, mode=ImageReadMode.RGB).to(self._device)
+        with Image.open(BytesIO(encoded)) as image:
+            pixels = np.asarray(image.convert("RGB"))
+        return torch.from_numpy(pixels).permute(2, 0, 1).to(self._device)
 
 
 def is_sequential_jpeg(encoded: bytes) -> bool:
