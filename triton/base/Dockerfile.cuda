@@ -53,11 +53,13 @@ RUN apt-get update \
         "libnvinfer-headers-plugin-dev=${TENSORRT_APT_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
+# --ignore-installed: pip cannot replace Debian's own setuptools and wheel, so the locked
+# versions install beside them, into /usr/local, which comes first on the path.
 # DALI comes from the same lock as in the runtime image. The DALI backend builds against
 # it instead of downloading its own, so the backend and our pipelines use one DALI.
 COPY requirements-build.txt requirements-cuda.txt /tmp/
-RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-build.txt \
-    && pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-cuda.txt
+RUN pip3 install --no-cache-dir --ignore-installed --no-deps --require-hashes -r /tmp/requirements-build.txt \
+    && pip3 install --no-cache-dir --ignore-installed --no-deps --require-hashes -r /tmp/requirements-cuda.txt
 
 RUN curl -fsSL -o /tmp/boost.tar.gz "${BOOST_ARCHIVE}" \
     && echo "${BOOST_ARCHIVE_SHA256}  /tmp/boost.tar.gz" | sha256sum -c - \
@@ -136,7 +138,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-cuda.txt /tmp/
-RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-cuda.txt \
+RUN pip3 install --no-cache-dir --ignore-installed --no-deps --require-hashes -r /tmp/requirements-cuda.txt \
     && rm /tmp/requirements-cuda.txt
 
 COPY --from=builder /opt/tritonserver /opt/tritonserver

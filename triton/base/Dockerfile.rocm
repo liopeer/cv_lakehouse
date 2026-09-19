@@ -56,8 +56,10 @@ RUN echo "deb [arch=amd64] https://repo.radeon.com/graphics/${ROCM_VERSION}/ubun
         hipify-clang rocjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# --ignore-installed: pip cannot replace Debian's own setuptools and wheel, so the locked
+# versions install beside them, into /usr/local, which comes first on the path.
 COPY requirements-build.txt /tmp/
-RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-build.txt
+RUN pip3 install --no-cache-dir --ignore-installed --no-deps --require-hashes -r /tmp/requirements-build.txt
 
 RUN curl -fsSL -o /tmp/boost.tar.gz "${BOOST_ARCHIVE}" \
     && echo "${BOOST_ARCHIVE_SHA256}  /tmp/boost.tar.gz" | sha256sum -c - \
@@ -221,7 +223,7 @@ RUN apt-get update \
 # serves torch.compile, which nothing here calls, so the lock leaves it out. aotriton
 # keeps the kernels for RDNA3 and RDNA4.
 COPY requirements-rocm.txt /tmp/
-RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-rocm.txt \
+RUN pip3 install --no-cache-dir --ignore-installed --no-deps --require-hashes -r /tmp/requirements-rocm.txt \
     && find /usr/local/lib/python3.12/dist-packages/torch/lib/aotriton.images \
         -mindepth 1 -maxdepth 1 -type d ! -name 'amd-gfx110*' ! -name 'amd-gfx120*' \
         -exec rm -rf {} + \
