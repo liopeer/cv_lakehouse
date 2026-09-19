@@ -8,12 +8,13 @@
 # backends, TensorRT for building engines, DALI for serializing pipelines, and CPU
 # torch. `make build PLATFORM=cuda` passes every argument from versions.env.
 #
-# It derives from the public nvidia/cuda images, not from nvcr.io, so the NVIDIA Deep
-# Learning Container License does not apply. The builder compiles Triton on the CUDA
-# SDK. The runtime image is the CUDA runtime with the TensorRT runtime.
+# The builder compiles Triton on the CUDA SDK of the nvidia/cuda devel image. The NVIDIA
+# Deep Learning Container License governs the nvidia/cuda images, so the runtime stage
+# starts from plain Ubuntu. It installs only the CUDA and TensorRT runtime libraries from
+# NVIDIA's apt repository, under their own licences.
 
 ARG CUDA_DEVEL_IMAGE
-ARG CUDA_RUNTIME_IMAGE
+ARG UBUNTU_IMAGE
 
 # ---------------------------------------------------------------------------------------
 FROM ${CUDA_DEVEL_IMAGE} AS builder
@@ -113,28 +114,53 @@ RUN /src/collect_licences.sh /opt/licences \
         boost=/src/boost
 
 # ---------------------------------------------------------------------------------------
-FROM ${CUDA_RUNTIME_IMAGE}
+FROM ${UBUNTU_IMAGE}
 
 ARG UBUNTU_SNAPSHOT
+ARG CA_CERTIFICATES_APT_VERSION
+ARG OPENSSL_APT_VERSION
+ARG CUDA_CUDART_APT_VERSION
+ARG CUPTI_APT_VERSION
 ARG TENSORRT_APT_VERSION
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1
-RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
 
-# One TensorRT, for the backend and for building engines in Python. The ONNX parser
-# builds an engine from the exported ONNX. The Python backend needs libarchive and
-# libpython.
+# The snapshot is only reachable over HTTPS, so the CA certificates come first, from the
+# plain archive and at the versions of the snapshot.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        "ca-certificates=${CA_CERTIFICATES_APT_VERSION}" "openssl=${OPENSSL_APT_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl gnupg \
+    && curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/3bf863cc.pub \
+        | gpg --dearmor -o /etc/apt/keyrings/cuda.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/cuda.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64 /" \
+        > /etc/apt/sources.list.d/cuda.list \
+    && rm -rf /var/lib/apt/lists/*
+
+# One TensorRT, for the backend and for building engines in Python. The ONNX parser
+# builds an engine from the exported ONNX. The TensorRT backend links CUPTI. The
+# config-common packages of cudart release with it, and pinning them keeps them from
+# moving to a newer CUDA. The Python backend needs libarchive and libpython.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        "cuda-cudart-13-1=${CUDA_CUDART_APT_VERSION}" \
+        "cuda-toolkit-13-1-config-common=${CUDA_CUDART_APT_VERSION}" \
+        "cuda-toolkit-13-config-common=${CUDA_CUDART_APT_VERSION}" \
+        "cuda-toolkit-config-common=${CUDA_CUDART_APT_VERSION}" \
+        "cuda-cupti-13-1=${CUPTI_APT_VERSION}" \
         "libnvinfer10=${TENSORRT_APT_VERSION}" \
         "libnvinfer-plugin10=${TENSORRT_APT_VERSION}" \
         "libnvinfer-vc-plugin10=${TENSORRT_APT_VERSION}" \
         "libnvonnxparsers10=${TENSORRT_APT_VERSION}" \
         "python3-libnvinfer=${TENSORRT_APT_VERSION}" \
         libarchive13t64 libb64-0d libcurl4t64 libgomp1 libnuma1 libre2-10 \
-        libpython3.12t64 python3 python3-pip curl \
+        libpython3.12t64 python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-cuda.txt /tmp/
@@ -147,13 +173,19 @@ COPY collect_licences.sh /tmp/
 RUN /tmp/collect_licences.sh /opt/licences \
         tensorrt=deb:libnvinfer10 \
         cuda-runtime=deb:cuda-cudart-13-1 \
+        cupti=deb:cuda-cupti-13-1 \
     && rm /tmp/collect_licences.sh
 COPY licences.README /opt/licences/README
 COPY check_libraries.sh /opt/tritonserver/bin/
 
-# The DALI backend links the libdali of the DALI wheel.
-ENV PATH=/opt/tritonserver/bin:${PATH} \
-    LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/dali:${LD_LIBRARY_PATH} \
+# The DALI backend links the libdali of the DALI wheel. The NVIDIA container toolkit
+# reads the NVIDIA_* variables. It mounts the driver and nvidia-smi, and it refuses a
+# driver without CUDA 13.1.
+ENV PATH=/opt/tritonserver/bin:/usr/local/cuda/bin:${PATH} \
+    LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/dali \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    NVIDIA_REQUIRE_CUDA=cuda>=13.1 \
     TRITON_SERVER_VERSION=${TRITON_VERSION} \
     TRITON_CONTAINER_VERSION=${TRITON_CONTAINER_VERSION} \
     TRITON_PLATFORM=cuda

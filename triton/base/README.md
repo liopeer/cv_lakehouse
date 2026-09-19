@@ -50,8 +50,11 @@ repository there. A branch that is not pinned fails the build.
 
 ## What differs from upstream
 
-- The CUDA image derives from the public `nvidia/cuda` images, not from `nvcr.io`. So the
-  NVIDIA Deep Learning Container License does not apply.
+- The NVIDIA Deep Learning Container License governs every NVIDIA container image,
+  `nvidia/cuda` too. So only the CUDA builder uses `nvidia/cuda`. The CUDA runtime stage
+  starts from `ubuntu:24.04`, and it installs the CUDA runtime, CUPTI and TensorRT from
+  NVIDIA's apt repository.
+- The CUDA image has no `cuda-compat`, so the host driver supports CUDA 13.1 itself.
 - The DALI backend builds against the DALI of `requirements-cuda.txt`, not against its own
   download. The backend and the pipelines that `triton/dali_pipeline.py` serializes use one
   DALI.
