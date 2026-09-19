@@ -3,35 +3,28 @@
 ## Copyright (c) 2025–2026 Lionel Peer
 ##
 
-# The CUDA image. It includes the TensorRT, DALI, and Python backends used by the
-# ensemble.
-# Image preprocessing runs on GPU via the bundled DALI backend, so no PIL/
-# libjpeg toolchain is needed here -- the BLS model only needs numpy. Text
-# preprocessing (tokenization) has no DALI equivalent and reuses
-# shared_deps.mobileclip's tokenizer, which pulls in torch/torchvision/
-# open-clip-torch/timm as a side effect of module import; shared_deps is
-# installed with --no-deps to skip its unrelated pillow-simd dependency
-# (only used by the image encoder module, which the text path never imports).
+# The CUDA image. The base image in `base/` holds Triton with the TensorRT, DALI and
+# Python backends, the TensorRT Python package, DALI and a CPU build of torch. torch only
+# exports ONNX and tokenises text.
 #
 # The image holds no weights and no engine. `entrypoint.sh` builds both engines and
 # both DALI pipelines on the first start, for the GPU it finds, and caches them in
 # /cache. An engine only runs on the GPU architecture and the TensorRT version that
 # built it, so it cannot be built in CI, which has no GPU.
-FROM nvcr.io/nvidia/tritonserver:25.03-py3@sha256:517c069d37327883715bb548e5db52ebd5bead0faffb9add3f2eb8aa2b81a047
+ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:cuda-dev
+FROM ${BASE_IMAGE}
 
 WORKDIR /opt/mobileclip
 
-# requirements-cuda.txt pins every package with its hash, and `make lock` writes it.
-# shared_deps goes in on its own with --no-deps, which skips pillow-simd.
+# requirements-cuda.txt pins every package with its hash, and `make lock` writes it. It
+# leaves out the packages of the base image. shared_deps goes in on its own with
+# --no-deps, which skips pillow-simd.
 COPY requirements-cuda.txt /opt/mobileclip/
-RUN pip install --no-cache-dir --no-deps --require-hashes -r requirements-cuda.txt
+RUN pip3 install --no-cache-dir --no-deps --require-hashes -r requirements-cuda.txt
 COPY shared_deps_server/ /opt/mobileclip/shared_deps_server/
-RUN pip install --no-cache-dir --no-deps ./shared_deps_server/
+RUN pip3 install --no-cache-dir --no-deps ./shared_deps_server/
 
 COPY model_repository/common/ model_repository/cuda/ /models/
 COPY dali_pipeline.py entrypoint.sh version.txt /opt/mobileclip/
 
-ENV TRITON_PLATFORM=cuda
-
-# The base image's entrypoint sets up the CUDA environment, then runs ours.
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh", "/opt/mobileclip/entrypoint.sh"]
+ENTRYPOINT ["/opt/mobileclip/entrypoint.sh"]

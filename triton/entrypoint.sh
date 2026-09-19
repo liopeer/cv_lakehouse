@@ -7,7 +7,7 @@
 # Build the models for this GPU on the first start, cache them, link them into the
 # model repository and start Triton. The arguments go to tritonserver.
 #
-# TRITON_PLATFORM comes from the Dockerfile.
+# TRITON_PLATFORM comes from the base image.
 # - cuda: TensorRT engines and DALI pipelines. An engine is tied to the GPU architecture
 #   and to the TensorRT version, and the image version fixes the TensorRT version.
 # - rocm: ONNX models. ONNX Runtime compiles them with MIGraphX when Triton loads them,

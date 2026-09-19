@@ -1,1 +1,0 @@
-../../_mobileclip_s0_image_pipeline/1/model.py

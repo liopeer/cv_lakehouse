@@ -129,12 +129,11 @@ jobs:
       MAJOR: ${{ needs.release-please.outputs.triton-major }}
       MINOR: ${{ needs.release-please.outputs.triton-minor }}
     steps:
-      # The tritonserver bases are about 20 GB, more than a runner has free.
-      # The ROCm image is about 40 GB, because the ROCm build of torch brings its own
-      # copy of the ROCm libraries. It needs the large packages gone as well.
+      # The base images are about 12 GB, close to what a runner has free. The removal of
+      # the large apt packages takes minutes, and the images do not need it.
       - uses: jlumbroso/free-disk-space@v2
         with:
-          large-packages: ${{ matrix.platform == 'rocm' }}
+          large-packages: false
 
       - uses: actions/checkout@v7
         with:

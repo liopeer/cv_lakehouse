@@ -29,9 +29,6 @@ rocJPEG decodes sequential JPEG only. The ROCm image decodes every other image o
 CPU, such as a PNG or a progressive JPEG. The two images resize with different code, so
 their embeddings differ slightly.
 
-The ROCm build of Triton has no ensemble scheduler. So on ROCm, a Python model in place of
-each `_pipeline` ensemble sends a request to the preprocessing model, then to the encoder.
-
 Text tokenisation has no DALI equivalent, so it runs on the CPU before the text encoder.
 
 This directory is vendored from `github.com/liopeer/lightly-studio`, at
@@ -43,7 +40,8 @@ local project.
 ## Run
 
 The server needs a Linux host with docker, and an NVIDIA GPU with the NVIDIA container
-runtime or an AMD GPU with ROCm.
+runtime or an AMD GPU with ROCm. The CUDA image needs a GPU of compute capability 7.5 or
+newer, and a driver that supports CUDA 13.1, which is R580 or newer.
 
 ```bash
 export CV_LAKEHOUSE_ROOT=/absolute/path/to/the/lake
@@ -63,7 +61,11 @@ root, `make triton-up` does the same as `make up`.
 A release publishes both images to `ghcr.io/liopeer/cv_lakehouse-triton`. The platform is
 a tag suffix: `X.Y.Z-cuda` and `X.Y.Z-rocm`, and `X.Y-` and `X-` tags move with them.
 
-Each image installs its Python packages from a lock file, `requirements-cuda.txt` or
+Each image starts from a base image in `base/`, pinned by digest. The base image holds
+Triton, built from source, and the large packages, such as torch. `base/README.md` tells
+how to build it.
+
+Each image installs its other Python packages from a lock file, `requirements-cuda.txt` or
 `requirements-rocm.txt`. The lock files pin every package with its hash. To change a
 package, edit the `.in` file beside the lock file and run `make lock`. `make lock` keeps
 every other pin. `make lock UPGRADE=--upgrade` moves every pin to its newest version.
