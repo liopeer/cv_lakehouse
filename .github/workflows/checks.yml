@@ -1,0 +1,29 @@
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# The checks, in one place, because two workflows run them: `build.yml` on every push and
+# pull request, `release.yml` on the commit that a release was cut from.
+
+name: checks
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # No `ref`. A called workflow checks out the commit that triggered the caller, which
+      # for `release.yml` is the commit that the tag points at.
+      - uses: actions/checkout@v7
+
+      # A full version: setup-uv publishes no floating major tag since v8.
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+
+      - run: make check

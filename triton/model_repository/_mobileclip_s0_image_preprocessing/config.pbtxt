@@ -1,0 +1,46 @@
+name: "_mobileclip_s0_image_preprocessing"
+backend: "dali"
+max_batch_size: 256
+dynamic_batching {
+  preferred_batch_size: [ 256 ]
+}
+input [
+  {
+    name: "IMAGE_PATH"
+    data_type: TYPE_UINT8
+    dims: [ -1 ]
+  },
+  {
+    name: "CROP_X"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_Y"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_WIDTH"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_HEIGHT"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  }
+]
+output [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [ 3, 256, 256 ]
+  }
+]
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

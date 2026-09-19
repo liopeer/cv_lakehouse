@@ -1,0 +1,154 @@
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# Cut a release, and publish the image that the release names.
+#
+# This runs on every push to `main`. An ordinary merge only refreshes the release pull
+# requests that release-please keeps open, one for the app and one for `triton/`. Merging
+# one of them is the release: it tags, creates the GitHub Release, and the matching image
+# job builds and pushes.
+#
+# All of this lives in one workflow, because a release that the built-in GITHUB_TOKEN
+# creates triggers no other workflow run.
+#
+# `verify` exists for the same reason. GITHUB_TOKEN opens the release pull request, so no
+# check runs on it. `verify` runs the checks on the commit that was released, and the
+# images wait for it.
+
+name: release
+
+on:
+  push:
+    branches: [main]
+
+# Never abandon a half-cut release: a cancelled run could tag without pushing the image.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # tag, and create the release
+      pull-requests: write   # open and update the release pull requests
+      issues: write          # label them
+    outputs:
+      app: ${{ steps.rp.outputs.release_created }}
+      app-tag: ${{ steps.rp.outputs.tag_name }}
+      app-version: ${{ steps.rp.outputs.version }}
+      app-major: ${{ steps.rp.outputs.major }}
+      app-minor: ${{ steps.rp.outputs.minor }}
+      triton: ${{ steps.rp.outputs['triton--release_created'] }}
+      triton-tag: ${{ steps.rp.outputs['triton--tag_name'] }}
+      triton-version: ${{ steps.rp.outputs['triton--version'] }}
+      triton-major: ${{ steps.rp.outputs['triton--major'] }}
+      triton-minor: ${{ steps.rp.outputs['triton--minor'] }}
+    steps:
+      # Manifest mode: the version of record is `.release-please-manifest.json`, not the
+      # git tags.
+      - uses: googleapis/release-please-action@v5
+        id: rp
+
+  # Only on a merge that cuts a release, so an ordinary merge runs the checks once.
+  #
+  # This gates the image, not the tag: release-please has already tagged when it fails.
+  # A red run leaves a release without an image. Fix forward and cut again.
+  verify:
+    needs: release-please
+    if: needs.release-please.outputs.app == 'true' || needs.release-please.outputs.triton == 'true'
+    uses: ./.github/workflows/checks.yml
+
+  # Three tags. `X.Y.Z` never moves and is the one to pin. `X.Y` and `X` move forward
+  # onto each new release under them. No `latest`.
+  #
+  # The version comes from the action's outputs, so the image tag and the git tag cannot
+  # disagree.
+  app-image:
+    needs: [release-please, verify]
+    if: needs.release-please.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      VERSION: ${{ needs.release-please.outputs.app-version }}
+      MAJOR: ${{ needs.release-please.outputs.app-major }}
+      MINOR: ${{ needs.release-please.outputs.app-minor }}
+    steps:
+      # By tag rather than by SHA, so a manual re-run builds what the release points at.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.app-tag }}
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:${{ env.MAJOR }}.${{ env.MINOR }}
+            ${{ env.IMAGE }}:${{ env.MAJOR }}
+          # The labels are the only place where a running container carries its version.
+          # `source` links the package to this repository.
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+          provenance: false
+          cache-from: type=gha,scope=app
+
+  triton-image:
+    needs: [release-please, verify]
+    if: needs.release-please.outputs.triton == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}-triton
+      VERSION: ${{ needs.release-please.outputs.triton-version }}
+      MAJOR: ${{ needs.release-please.outputs.triton-major }}
+      MINOR: ${{ needs.release-please.outputs.triton-minor }}
+    steps:
+      # The tritonserver base is about 15 GB, more than a runner has free.
+      - uses: jlumbroso/free-disk-space@v2
+        with:
+          large-packages: false
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.triton-tag }}
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: triton
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:${{ env.MAJOR }}.${{ env.MINOR }}
+            ${{ env.IMAGE }}:${{ env.MAJOR }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+          provenance: false

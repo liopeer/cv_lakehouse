@@ -1,0 +1,7 @@
+# Weights and engines never go into git or into the image. `entrypoint.sh` builds the
+# engines on the first start.
+checkpoints/
+*.plan
+*.onnx
+*.dali
+*.pt

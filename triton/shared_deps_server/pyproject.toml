@@ -1,0 +1,42 @@
+[project]
+name = "shared-deps"
+version = "0.1.0"
+description = "Export MobileCLIP to ONNX and TensorRT for the Triton server."
+readme = "README.md"
+authors = [
+    { name = "Lionel Peer" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.24",
+    "open-clip-torch>=2.20",
+    "pillow-simd>=9.5.0.post2",
+    "timm>=0.9.5",
+    "torch>=2.5,<3",
+]
+
+[project.optional-dependencies]
+export = [
+    "onnx>=1.16",
+    "onnxscript>=0.1",
+]
+tensorrt = [
+    "onnx>=1.16",
+    "onnxscript>=0.1",
+    "tensorrt-cu12==10.9.0.34",
+]
+
+[project.scripts]
+mobileclip-export-onnx = "shared_deps.mobileclip_export:main_export_onnx"
+mobileclip-export-tensorrt = "shared_deps.mobileclip_export:main_export_tensorrt"
+shared-deps = "shared_deps:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+exclude-dependencies = ["pillow"]
+
+[build-system]
+requires = ["uv_build>=0.11.16,<0.12.0"]
+build-backend = "uv_build"

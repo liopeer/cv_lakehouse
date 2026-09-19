@@ -1,0 +1,48 @@
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# Make sure that a pull request title is a Conventional Commit.
+#
+# Pull requests are squash-merged, and the squash commit takes the title verbatim. So the
+# title is what release-please reads to pick the next version and to write the changelog.
+
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      # The types of `release-please-config.json`. Keep the two in step: a type that is
+      # accepted here but unknown there lands on `main` and drops out of the changelog.
+      #
+      # `chore` is here because release-please titles its own pull request
+      # `chore(main): release X.Y.Z`.
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            docs
+            build
+            ci
+            test
+            style
+            chore
+            revert
+          requireScope: false
+          subjectPattern: '^(?![A-Z])(?!.*\.$).+$'
+          subjectPatternError: |
+            The subject "{subject}" of "{title}" is invalid: start it in lower case and
+            leave off the final period, so that it reads as a changelog line.

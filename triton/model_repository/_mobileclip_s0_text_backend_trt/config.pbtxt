@@ -1,0 +1,26 @@
+name: "_mobileclip_s0_text_backend_trt"
+platform: "tensorrt_plan"
+max_batch_size: 256
+dynamic_batching {
+  preferred_batch_size: [ 256 ]
+}
+input [
+  {
+    name: "tokens"
+    data_type: TYPE_INT64
+    dims: [ 77 ]
+  }
+]
+output [
+  {
+    name: "embeddings"
+    data_type: TYPE_FP32
+    dims: [ 512 ]
+  }
+]
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

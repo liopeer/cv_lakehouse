@@ -1,0 +1,22 @@
+.git/
+.github/
+.venv/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.pyrefly_cache/
+
+# `.env` holds this machine's paths and settings. The image takes its settings from the
+# environment it runs in.
+.env
+
+# The lake itself, when CV_LAKEHOUSE_ROOT is left at its default.
+data/
+
+# Not part of the code location. `triton/` builds its own image.
+triton/
+tests/
+tools/
+dev/

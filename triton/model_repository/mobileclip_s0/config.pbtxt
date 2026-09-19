@@ -1,0 +1,66 @@
+name: "mobileclip_s0"
+backend: "python"
+max_batch_size: 0
+parameters {
+  key: "max_concurrent_sub_requests"
+  value: {
+    string_value: "1024"
+  }
+}
+input [
+  {
+    name: "IMAGE_PATH"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "IMAGE_BYTES"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "TEXT"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "CROP_X"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "CROP_Y"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "CROP_WIDTH"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "CROP_HEIGHT"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+    optional: true
+  }
+]
+output [
+  {
+    name: "EMBEDDING"
+    data_type: TYPE_FP32
+    dims: [ -1, 512 ]
+  }
+]
+instance_group [
+  {
+    kind: KIND_CPU
+    count: 16
+  }
+]

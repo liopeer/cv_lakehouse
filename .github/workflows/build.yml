@@ -1,0 +1,76 @@
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# Run the checks, and prove that the images still build.
+#
+# Nothing here reaches a registry. `release.yml` publishes. A broken Dockerfile then
+# fails on the change that broke it, not on a release that has already tagged.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # A called workflow's check is reported as `<caller job> / <called job>`, and
+  # `checks / check` is the name that the ruleset on `main` requires. Renaming either
+  # half leaves the ruleset waiting on a check that nobody produces.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      triton: ${{ steps.filter.outputs.triton }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            triton:
+              - 'triton/**'
+
+  app-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      # The gha cache needs a buildx builder. The release build reads the same scope.
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          provenance: false
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,scope=app,mode=max
+
+  # The tritonserver base is about 15 GB, so this runs only when `triton/` changes. The
+  # image is larger than the 10 GB gha cache, so it builds without one.
+  triton-image:
+    needs: changes
+    if: needs.changes.outputs.triton == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: jlumbroso/free-disk-space@v2
+        with:
+          large-packages: false
+      - uses: actions/checkout@v7
+      - uses: docker/build-push-action@v7
+        with:
+          context: triton
+          push: false
+          outputs: type=cacheonly
+          provenance: false

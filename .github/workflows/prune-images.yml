@@ -1,0 +1,60 @@
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# Bound the size of the two GHCR packages. The tags never move, so each release adds a
+# version for good. This sets how far back a rollback can reach.
+
+name: prune-images
+
+on:
+  schedule:
+    # Monday, early, and off the hour to stay out of the crowd at :00.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        package: [cv_lakehouse, cv_lakehouse-triton]
+    steps:
+      # The first release creates a package, and the delete action fails on a missing one.
+      - name: Check that the package exists
+        id: pkg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          path="/users/${{ github.repository_owner }}/packages/container/${{ matrix.package }}"
+          if gh api "$path" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "${{ matrix.package }} is not published yet." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The builds set `provenance: false`, so few versions are untagged, and nothing
+      # refers to them.
+      - name: Delete untagged versions
+        if: steps.pkg.outputs.exists == 'true'
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: container
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 0
+
+      # A version carries all of its tags, so this drops `X.Y.Z` together with a moving
+      # tag that points at it. The newest versions are never candidates, so whatever runs
+      # stays safe. A deployment pinned past the window fails on its next pull.
+      - name: Keep the 30 newest releases
+        if: steps.pkg.outputs.exists == 'true'
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: container
+          min-versions-to-keep: 30
