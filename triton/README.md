@@ -45,13 +45,20 @@ newer, and a driver that supports CUDA 13.1, which is R580 or newer.
 
 ```bash
 export CV_LAKEHOUSE_ROOT=/absolute/path/to/the/lake
-make up                                   # build this checkout and start it
-TRITON_VERSION=0.1.0 docker compose --profile rocm up -d   # or start a released image
+make up                        # build this checkout, and start it
+make up TRITON_VERSION=0.1.0   # or pull that release, and start it
 ```
 
 `make up` starts the ROCm image on a host with `/dev/kfd`, and the CUDA image otherwise.
 `make up PLATFORM=cuda` overrides the choice. `make down`, `make logs` and `make image`
-take the same variable.
+take the same variable. In production, pin `TRITON_VERSION` to an X.Y.Z release.
+
+The ROCm container joins the render group of the host, which owns `/dev/kfd`. `make up`
+passes the ID of that group as `RENDER_GID`. A direct `docker compose` call passes it too:
+
+```bash
+RENDER_GID=$(getent group render | cut -d: -f3) docker compose --profile rocm up -d
+```
 
 The server listens on `8010` HTTP, `8011` gRPC and `8012` metrics. From the repository
 root, `make triton-up` does the same as `make up`.
