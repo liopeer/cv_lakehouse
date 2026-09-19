@@ -10,7 +10,7 @@
 #
 # The image holds no weights. `entrypoint.sh` exports both encoders to ONNX on the first
 # start and caches them in /cache, together with the programs that MIGraphX compiles.
-ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:rocm-dev
+ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:rocm-r25.12-20260919@sha256:81ac8e71f0d01e9d88599de62d58163da9550d83f222e679f04e7eda0d289ab6
 FROM ${BASE_IMAGE}
 
 WORKDIR /opt/mobileclip

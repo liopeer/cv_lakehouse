@@ -63,7 +63,8 @@ a tag suffix: `X.Y.Z-cuda` and `X.Y.Z-rocm`, and `X.Y-` and `X-` tags move with 
 
 Each image starts from a base image in `base/`, pinned by digest. The base image holds
 Triton, built from source, and the large packages, such as torch. `base/README.md` tells
-how to build it.
+how to build it. To try a local base image, build with
+`--build-arg BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:rocm-dev`.
 
 Each image installs its other Python packages from a lock file, `requirements-cuda.txt` or
 `requirements-rocm.txt`. The lock files pin every package with its hash. To change a

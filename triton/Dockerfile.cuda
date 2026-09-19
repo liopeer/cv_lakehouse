@@ -11,7 +11,7 @@
 # both DALI pipelines on the first start, for the GPU it finds, and caches them in
 # /cache. An engine only runs on the GPU architecture and the TensorRT version that
 # built it, so it cannot be built in CI, which has no GPU.
-ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:cuda-dev
+ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:cuda-r25.12-20260919@sha256:52b7513db2e15c6497f54ae2dd1f37dbacf190e05fbbbc526c08a12548f6e290
 FROM ${BASE_IMAGE}
 
 WORKDIR /opt/mobileclip
