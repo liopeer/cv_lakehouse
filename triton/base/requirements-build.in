@@ -7,3 +7,7 @@ requests
 # The CMake and patchelf that build.py's own build image installs.
 cmake==4.0.3
 patchelf==0.17.2
+# Triton core builds its Python API wheel with `python3 -m build`, in an isolated
+# environment. Core's pyproject.toml pins the setuptools, wheel and mypy there itself.
+build
+virtualenv

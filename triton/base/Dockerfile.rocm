@@ -19,6 +19,7 @@ ARG UBUNTU_IMAGE
 FROM ${ROCM_DEVEL_IMAGE} AS builder
 
 ARG UBUNTU_SNAPSHOT
+ARG ROCM_VERSION
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
 ARG TRITON_COMMON_COMMIT
@@ -38,11 +39,18 @@ ARG BOOST_ARCHIVE
 ARG BOOST_ARCHIVE_SHA256
 
 ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1 CMAKE_POLICY_VERSION_MINIMUM=3.5
+# The ROCm dev image sets none of these, but AMD's build.py expects them, as its own
+# Triton image sets them. Without them, core's CMake finds no HIP.
+ENV ROCM_PATH=/opt/rocm HIP_PATH=/opt/rocm CMAKE_PREFIX_PATH=/opt/rocm:/opt/rocm/lib/cmake \
+    PATH=/opt/rocm/bin:${PATH}
 RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
 
 # The packages that build.py's own build image installs, as far as this build uses them,
-# plus hipify and the rocJPEG headers.
-RUN apt-get update \
+# plus hipify and the rocJPEG headers. The ROCm image has the ROCm repository with its key.
+# rocjpeg needs mesa-amdgpu-va-drivers, which the graphics repository publishes.
+RUN echo "deb [arch=amd64] https://repo.radeon.com/graphics/${ROCM_VERSION}/ubuntu noble main" \
+        > /etc/apt/sources.list.d/rocm-graphics.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         autoconf automake build-essential ca-certificates curl git gperf \
         libarchive-dev libb64-dev libcurl4-openssl-dev libgoogle-perftools-dev \
@@ -52,8 +60,10 @@ RUN apt-get update \
         hipify-clang rocjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# --ignore-installed: pip cannot replace Debian's own setuptools and wheel, so the locked
+# versions install beside them, into /usr/local, which comes first on the path.
 COPY requirements-build.txt /tmp/
-RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-build.txt
+RUN pip3 install --no-cache-dir --ignore-installed --no-deps --require-hashes -r /tmp/requirements-build.txt
 
 RUN curl -fsSL -o /tmp/boost.tar.gz "${BOOST_ARCHIVE}" \
     && echo "${BOOST_ARCHIVE_SHA256}  /tmp/boost.tar.gz" | sha256sum -c - \
@@ -105,7 +115,8 @@ RUN git clone --quiet /src/repos/core.git /tmp/core \
     && rm -rf /tmp/core
 
 # The ONNX Runtime paths make the backend link the prebuilt library instead of building
-# ONNX Runtime in a nested docker build.
+# ONNX Runtime in a nested docker build. They go in as extra arguments: an override only
+# replaces an argument that build.py already passes.
 RUN git clone --quiet --branch pinned /src/repos/server.git /src/server \
     && python3 /src/server/build.py \
         --no-container-build \
@@ -119,8 +130,8 @@ RUN git clone --quiet --branch pinned /src/repos/server.git /src/server \
         --repo-tag=common:pinned --repo-tag=core:pinned \
         --repo-tag=backend:pinned --repo-tag=thirdparty:pinned \
         --backend=ensemble --backend=python:pinned --backend=onnxruntime:pinned \
-        --override-backend-cmake-arg=onnxruntime:TRITON_ONNXRUNTIME_LIB_PATHS=/opt/onnxruntime/lib \
-        --override-backend-cmake-arg=onnxruntime:TRITON_ONNXRUNTIME_INCLUDE_PATHS=/opt/onnxruntime/include \
+        --extra-backend-cmake-arg=onnxruntime:TRITON_ONNXRUNTIME_LIB_PATHS=/opt/onnxruntime/lib \
+        --extra-backend-cmake-arg=onnxruntime:TRITON_ONNXRUNTIME_INCLUDE_PATHS=/opt/onnxruntime/include \
         --build-parallel="$(nproc)" \
     && cp -a /opt/onnxruntime/lib/. /opt/tritonserver/backends/onnxruntime/
 
@@ -152,18 +163,27 @@ RUN /src/collect_licences.sh /opt/licences \
 FROM ${UBUNTU_IMAGE}
 
 ARG UBUNTU_SNAPSHOT
+ARG CA_CERTIFICATES_APT_VERSION
+ARG OPENSSL_APT_VERSION
 ARG ROCM_VERSION
 ARG ROCM_APT_SUFFIX
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1
-RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
+
+# The snapshot is only reachable over HTTPS, so the CA certificates come first, from the
+# plain archive and at the versions of the snapshot.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        "ca-certificates=${CA_CERTIFICATES_APT_VERSION}" "openssl=${OPENSSL_APT_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
 
 # The versioned ROCm repositories never change. rocjpeg needs mesa-amdgpu-va-drivers,
 # which the graphics repository publishes.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && apt-get install -y --no-install-recommends curl gnupg \
     && curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /etc/apt/keyrings/rocm.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${ROCM_VERSION} noble main" \
         > /etc/apt/sources.list.d/rocm.list \
@@ -208,7 +228,7 @@ RUN apt-get update \
 # serves torch.compile, which nothing here calls, so the lock leaves it out. aotriton
 # keeps the kernels for RDNA3 and RDNA4.
 COPY requirements-rocm.txt /tmp/
-RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-rocm.txt \
+RUN pip3 install --no-cache-dir --ignore-installed --no-deps --require-hashes -r /tmp/requirements-rocm.txt \
     && find /usr/local/lib/python3.12/dist-packages/torch/lib/aotriton.images \
         -mindepth 1 -maxdepth 1 -type d ! -name 'amd-gfx110*' ! -name 'amd-gfx120*' \
         -exec rm -rf {} + \
