@@ -32,12 +32,15 @@ jobs:
       triton: ${{ steps.filter.outputs.triton }}
     steps:
       - uses: actions/checkout@v7
+      # The base images in triton/base build on a local machine, not here.
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          predicate-quantifier: every
           filters: |
             triton:
               - 'triton/**'
+              - '!triton/base/**'
 
   app-image:
     runs-on: ubuntu-latest

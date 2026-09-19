@@ -1,0 +1,10 @@
+# The Python packages of the CUDA base image. `make lock` compiles this file into
+# requirements-cuda.txt. TensorRT comes from apt, with the TensorRT backend.
+
+# torch only exports ONNX and tokenises, so the CPU build is enough.
+torch==2.14.0+cpu
+torchvision==0.29.0+cpu
+# The DALI that NGC 25.12 ships. The DALI backend builds against it.
+nvidia-dali-cuda130==1.52.0
+# The Python backend expects numpy 1.
+numpy==1.26.4
