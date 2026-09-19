@@ -49,6 +49,10 @@ jobs:
     steps:
       # Manifest mode: the version of record is `.release-please-manifest.json`, not the
       # git tags.
+      #
+      # Both release pull requests change adjacent lines of the manifest. A merge of one
+      # makes the other conflict. `always-update` in the config rebuilds each release
+      # branch from `main` on every run, so the conflict does not stay.
       - uses: googleapis/release-please-action@v5
         id: rp
 
