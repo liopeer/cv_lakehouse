@@ -23,12 +23,16 @@ PLATFORM ?= $(if $(wildcard /dev/kfd),rocm,cuda)
 COMPOSE := RENDER_GID=$(shell getent group render | cut -d: -f3) \
 	docker compose --profile $(PLATFORM)
 
+# Compose reads the tag suffix from TRITON_VERSION, so every recipe passes it on.
+export TRITON_VERSION
+
 image:
 	docker build -f Dockerfile.$(PLATFORM) -t ghcr.io/liopeer/cv_lakehouse-triton:dev-$(PLATFORM) .
 
 # Builds this checkout. The first start then builds the models into the cache volume.
+# `make up TRITON_VERSION=X.Y.Z` pulls that release, and builds nothing.
 up:
-	$(COMPOSE) up -d --build
+	$(COMPOSE) up -d $(if $(TRITON_VERSION),--pull always --no-build,--build)
 
 down:
 	$(COMPOSE) down

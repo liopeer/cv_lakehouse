@@ -63,11 +63,14 @@ services:
       - /dev/kfd
       - /dev/dri
     # The render group owns /dev/kfd. The image has no render group, so compose needs
-    # the ID on the host. `make up` sets RENDER_GID to it. Without it, the container
-    # fails to start with "unable to find group render".
+    # the ID on the host. `make up` sets RENDER_GID to it.
+    #
+    # Compose interpolates this file for every profile, so a required variable here
+    # breaks a cuda run too. The fallback names the fix instead, and the daemon prints
+    # it as the group that it cannot find.
     group_add:
       - video
-      - ${RENDER_GID:-render}
+      - ${RENDER_GID:-RENDER_GID-is-unset-run-make-up}
     security_opt:
       - seccomp=unconfined
 
