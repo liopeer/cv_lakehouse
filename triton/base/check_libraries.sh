@@ -12,6 +12,10 @@
 
 set -euo pipefail
 
+# A backend needs libtritonserver.so, which tritonserver already loaded when it loads the
+# backend.
+export LD_LIBRARY_PATH="/opt/tritonserver/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
 status=0
 while read -r file; do
     # The runtime images have no `file`, so read the ELF magic bytes.
