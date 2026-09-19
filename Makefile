@@ -21,11 +21,13 @@ lock:  ## Update the lock file after a dependency change.
 
 # The file list comes from git, so nothing that git ignores gets a header. An
 # `__init__.py` stays empty, and Apple's vendored mobileclip keeps its own licence.
-# A pattern is an fnmatch on the path, where `*` also matches a `/`.
+# release-please writes the changelogs without a header, and the release checks run
+# on its commit. A pattern is an fnmatch on the path, where `*` also matches a `/`.
 license-headers: sync  ## Add the licence header to every source file.
 	git ls-files --cached --others --exclude-standard -z \
 		| xargs -0 $(UV_RUN) licenseheaders -t dev/licenseheader_lionelpeer.tmpl \
-			-x '*__init__.py' 'triton/shared_deps_server/src/shared_deps/mobileclip/*' -f
+			-x '*__init__.py' 'triton/shared_deps_server/src/shared_deps/mobileclip/*' \
+			'*CHANGELOG.md' -f
 
 format: license-headers  ## Format the code, and add the licence headers.
 	$(UV_RUN) ruff format .
