@@ -26,7 +26,7 @@ instance_group [
 ]
 # MIGraphX compiles one program for each power of two up to migraphx_max_dynamic_batch
 # when the model loads, and pads a batch to the next one. The compile time doubles with
-# each step, so 256 takes hours on the first start. 64 takes minutes.
+# each step. Up to 64, the first start on a Radeon RX 7900 XTX takes about 30 minutes.
 optimization {
   execution_accelerators {
     gpu_execution_accelerator: [

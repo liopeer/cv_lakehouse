@@ -25,9 +25,12 @@ IMAGE_BYTES -> rocJPEG + torchvision: decode, resize, normalise       -> ONNX im
 TEXT        -> CPU tokenisation (Python backend)                      -> ONNX text encoder  -> EMBEDDING
 ```
 
-rocJPEG decodes baseline JPEG only. The ROCm image decodes every other image on the CPU,
-such as a PNG or a progressive JPEG. The two images resize with different code, so their
-embeddings differ slightly.
+rocJPEG decodes sequential JPEG only. The ROCm image decodes every other image on the
+CPU, such as a PNG or a progressive JPEG. The two images resize with different code, so
+their embeddings differ slightly.
+
+The ROCm build of Triton has no ensemble scheduler. So on ROCm, a Python model in place of
+each `_pipeline` ensemble sends a request to the preprocessing model, then to the encoder.
 
 Text tokenisation has no DALI equivalent, so it runs on the CPU before the text encoder.
 
@@ -74,7 +77,7 @@ builds the models. Then it deletes the checkpoint.
   pipelines. That takes several minutes.
 - The ROCm image exports the two encoders to ONNX. Then Triton loads them, and MIGraphX
   compiles a program for each batch size of 1, 2, 4 and so on up to 64. That takes about
-  an hour on a Radeon RX 7900 XTX.
+  30 minutes on a Radeon RX 7900 XTX. A restart then takes seconds.
 
 The models go to the `/cache` volume, under the image version, the platform and the GPU
 architecture. The ROCm image also keeps the compiled MIGraphX programs there. A restart
