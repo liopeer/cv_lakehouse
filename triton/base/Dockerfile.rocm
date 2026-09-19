@@ -1,0 +1,246 @@
+# check=skip=InvalidDefaultArgInFrom
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# The ROCm base image: Triton 25.12 with the ensemble, Python and ONNX Runtime backends,
+# ONNX Runtime with its MIGraphX execution provider, rocJPEG and rocPyDecode, and a
+# torch that uses the ROCm in /opt/rocm. `make build PLATFORM=rocm` passes every
+# argument from versions.env.
+#
+# The builder compiles Triton on the ROCm SDK. The runtime image is plain Ubuntu with
+# only the ROCm runtime packages.
+
+ARG ROCM_DEVEL_IMAGE
+ARG UBUNTU_IMAGE
+
+# ---------------------------------------------------------------------------------------
+FROM ${ROCM_DEVEL_IMAGE} AS builder
+
+ARG UBUNTU_SNAPSHOT
+ARG TRITON_VERSION
+ARG TRITON_CONTAINER_VERSION
+ARG TRITON_COMMON_COMMIT
+ARG ROCM_SERVER_COMMIT
+ARG ROCM_CORE_COMMIT
+ARG ROCM_BACKEND_COMMIT
+ARG ROCM_THIRD_PARTY_COMMIT
+ARG ROCM_PYTHON_BACKEND_COMMIT
+ARG ROCM_ONNXRUNTIME_BACKEND_COMMIT
+ARG ROCPYDECODE_COMMIT
+ARG ONNXRUNTIME_VERSION
+ARG ONNXRUNTIME_MIGRAPHX_WHEEL
+ARG ONNXRUNTIME_MIGRAPHX_WHEEL_SHA256
+ARG ONNXRUNTIME_HEADERS_ARCHIVE
+ARG ONNXRUNTIME_HEADERS_ARCHIVE_SHA256
+ARG BOOST_ARCHIVE
+ARG BOOST_ARCHIVE_SHA256
+
+ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1 CMAKE_POLICY_VERSION_MINIMUM=3.5
+RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
+
+# The packages that build.py's own build image installs, as far as this build uses them,
+# plus hipify and the rocJPEG headers.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        autoconf automake build-essential ca-certificates curl git gperf \
+        libarchive-dev libb64-dev libcurl4-openssl-dev libgoogle-perftools-dev \
+        libnuma-dev libre2-dev libssl-dev libtool libxml2-dev pkg-config \
+        python3-dev python3-pip python3-setuptools python3-wheel \
+        rapidjson-dev unzip wget zlib1g-dev \
+        hipify-clang rocjpeg-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-build.txt /tmp/
+RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-build.txt
+
+RUN curl -fsSL -o /tmp/boost.tar.gz "${BOOST_ARCHIVE}" \
+    && echo "${BOOST_ARCHIVE_SHA256}  /tmp/boost.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/boost.tar.gz -C /tmp \
+    && mv /tmp/boost_*/boost /usr/include/boost \
+    && mkdir -p /src/boost \
+    && mv /tmp/boost_*/LICENSE_1_0.txt /src/boost/ \
+    && rm -rf /tmp/boost*
+
+# AMD's prebuilt ONNX Runtime, so that the build compiles neither ONNX Runtime nor
+# MIGraphX. The backend needs only the C API headers of the same release.
+RUN mkdir -p /opt/onnxruntime/lib /opt/onnxruntime/include \
+    && curl -fsSL -o /tmp/ort.whl "${ONNXRUNTIME_MIGRAPHX_WHEEL}" \
+    && echo "${ONNXRUNTIME_MIGRAPHX_WHEEL_SHA256}  /tmp/ort.whl" | sha256sum -c - \
+    && python3 -m zipfile -e /tmp/ort.whl /tmp/ort \
+    && cp /tmp/ort/onnxruntime/capi/libonnxruntime*.so* /opt/onnxruntime/lib/ \
+    && ln -s "libonnxruntime.so.${ONNXRUNTIME_VERSION}" /opt/onnxruntime/lib/libonnxruntime.so \
+    && ln -s "libonnxruntime.so.${ONNXRUNTIME_VERSION}" /opt/onnxruntime/lib/libonnxruntime.so.1 \
+    && cp /tmp/ort/onnxruntime/LICENSE /tmp/ort/onnxruntime/ThirdPartyNotices.txt /opt/onnxruntime/ \
+    && curl -fsSL -o /tmp/ort.tgz "${ONNXRUNTIME_HEADERS_ARCHIVE}" \
+    && echo "${ONNXRUNTIME_HEADERS_ARCHIVE_SHA256}  /tmp/ort.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/ort.tgz -C /tmp \
+    && cp -r /tmp/onnxruntime-linux-x64-*/include/. /opt/onnxruntime/include/ \
+    && rm -rf /tmp/ort*
+
+# AMD's fork for every repository that it forks, and upstream common. The fork's
+# build.py asks for the onnxruntime and python backends by fixed branch names.
+COPY fetch_sources.sh /src/
+RUN /src/fetch_sources.sh \
+        https://github.com/triton-inference-server/ \
+        https://github.com/ROCm/triton-inference-server- <<EOF
+server              https://github.com/ROCm/triton-inference-server-server              ${ROCM_SERVER_COMMIT}              pinned
+core                https://github.com/ROCm/triton-inference-server-core                ${ROCM_CORE_COMMIT}                pinned
+common              https://github.com/triton-inference-server/common                   ${TRITON_COMMON_COMMIT}            pinned
+backend             https://github.com/ROCm/triton-inference-server-backend             ${ROCM_BACKEND_COMMIT}             pinned
+third_party         https://github.com/ROCm/triton-inference-server-third_party         ${ROCM_THIRD_PARTY_COMMIT}         pinned
+python_backend      https://github.com/ROCm/triton-inference-server-python_backend      ${ROCM_PYTHON_BACKEND_COMMIT}      pinned rocm7.2_r25.12
+onnxruntime_backend https://github.com/ROCm/triton-inference-server-onnxruntime_backend ${ROCM_ONNXRUNTIME_BACKEND_COMMIT} pinned rocm7.2.3_r25.12
+EOF
+
+# The fork leaves the ensemble scheduler out of the ROCm build. AMD's later fix,
+# b903977272 on rocm10.0.0_r26.09, puts it back.
+COPY patches/rocm-core-hipify-ensemble.patch /src/
+RUN git clone --quiet /src/repos/core.git /tmp/core \
+    && git -C /tmp/core apply /src/rocm-core-hipify-ensemble.patch \
+    && git -C /tmp/core -c user.name=build -c user.email=build@localhost \
+        commit --quiet --all --message "Hipify ensemble_scheduler in ROCm core builds." \
+    && git -C /tmp/core push --quiet --force origin HEAD:pinned \
+    && rm -rf /tmp/core
+
+# The ONNX Runtime paths make the backend link the prebuilt library instead of building
+# ONNX Runtime in a nested docker build.
+RUN git clone --quiet --branch pinned /src/repos/server.git /src/server \
+    && python3 /src/server/build.py \
+        --no-container-build \
+        --build-dir=/tmp/tritonbuild \
+        --install-dir=/opt/tritonserver \
+        --version="${TRITON_VERSION}" \
+        --container-version="${TRITON_CONTAINER_VERSION}" \
+        --enable-rocm \
+        --enable-logging --enable-stats --enable-metrics --enable-cpu-metrics \
+        --endpoint=grpc --endpoint=http \
+        --repo-tag=common:pinned --repo-tag=core:pinned \
+        --repo-tag=backend:pinned --repo-tag=thirdparty:pinned \
+        --backend=ensemble --backend=python:pinned --backend=onnxruntime:pinned \
+        --override-backend-cmake-arg=onnxruntime:TRITON_ONNXRUNTIME_LIB_PATHS=/opt/onnxruntime/lib \
+        --override-backend-cmake-arg=onnxruntime:TRITON_ONNXRUNTIME_INCLUDE_PATHS=/opt/onnxruntime/include \
+        --build-parallel="$(nproc)" \
+    && cp -a /opt/onnxruntime/lib/. /opt/tritonserver/backends/onnxruntime/
+
+# rocPyDecode publishes no package, so it builds from source.
+RUN git init --quiet /src/rocPyDecode \
+    && git -C /src/rocPyDecode fetch --quiet --depth 1 https://github.com/ROCm/rocPyDecode.git "${ROCPYDECODE_COMMIT}" \
+    && git -C /src/rocPyDecode checkout --quiet FETCH_HEAD \
+    && cmake -S /src/rocPyDecode/jpegDecode -B /tmp/rocpydecode \
+        -DCMAKE_INSTALL_PREFIX=/opt/rocpydecode \
+        -DPYTHON_VERSION_SUGGESTED=3.12 \
+    && cmake --build /tmp/rocpydecode --parallel \
+    && cmake --install /tmp/rocpydecode
+
+COPY collect_licences.sh /src/
+RUN /src/collect_licences.sh /opt/licences \
+        triton-server=git:/src/repos/server.git \
+        triton-core=git:/src/repos/core.git \
+        triton-common=git:/src/repos/common.git \
+        triton-backend=git:/src/repos/backend.git \
+        triton-third-party=git:/src/repos/third_party.git \
+        triton-python-backend=git:/src/repos/python_backend.git \
+        triton-onnxruntime-backend=git:/src/repos/onnxruntime_backend.git \
+        triton-linked-libraries=tree:/tmp/tritonbuild/tritonserver/build/third-party-src \
+        boost=/src/boost \
+        onnxruntime=/opt/onnxruntime \
+        rocpydecode=/src/rocPyDecode
+
+# ---------------------------------------------------------------------------------------
+FROM ${UBUNTU_IMAGE}
+
+ARG UBUNTU_SNAPSHOT
+ARG ROCM_VERSION
+ARG ROCM_APT_SUFFIX
+ARG TRITON_VERSION
+ARG TRITON_CONTAINER_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1
+RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
+
+# The versioned ROCm repositories never change. rocjpeg needs mesa-amdgpu-va-drivers,
+# which the graphics repository publishes.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /etc/apt/keyrings/rocm.gpg \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${ROCM_VERSION} noble main" \
+        > /etc/apt/sources.list.d/rocm.list \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/graphics/${ROCM_VERSION}/ubuntu noble main" \
+        > /etc/apt/sources.list.d/rocm-graphics.list \
+    && printf 'Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600\n' > /etc/apt/preferences.d/rocm-pin-600 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The runtime libraries of MIGraphX, rocJPEG and torch. torch 2.11 lw links hipBLASLt,
+# hipBLAS, hipFFT, hipRAND, hipSOLVER, hipSPARSELt, hipSPARSE, MIOpen, RCCL, rocBLAS and
+# rocSOLVER from /opt/rocm. The Python backend needs libarchive and libpython.
+#
+# The kernel libraries hold kernels for every GPU. The image keeps RDNA3 and RDNA4
+# (gfx110x, gfx120x), the files that name no GPU, and the rocBLAS fallback kernels. The
+# rocFFT kernel cache is optional and big.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        "migraphx=2.15.0.${ROCM_APT_SUFFIX}" \
+        "rocjpeg=1.4.0.${ROCM_APT_SUFFIX}" \
+        "hipblaslt=1.2.2.${ROCM_APT_SUFFIX}" \
+        "hipblas=3.2.0.${ROCM_APT_SUFFIX}" \
+        "hipfft=1.0.22.${ROCM_APT_SUFFIX}" \
+        "hiprand=3.1.0.${ROCM_APT_SUFFIX}" \
+        "hipsolver=3.2.0.${ROCM_APT_SUFFIX}" \
+        "hipsparselt=0.2.6.${ROCM_APT_SUFFIX}" \
+        "hipsparse=4.2.0.${ROCM_APT_SUFFIX}" \
+        "miopen-hip=3.5.1.${ROCM_APT_SUFFIX}" \
+        "rccl=2.27.7.${ROCM_APT_SUFFIX}" \
+        "rocblas=5.2.0.${ROCM_APT_SUFFIX}" \
+        "rocsolver=3.32.0.${ROCM_APT_SUFFIX}" \
+        "rocminfo=1.0.0.${ROCM_APT_SUFFIX}" \
+        libarchive13t64 libb64-0d libcurl4t64 libgomp1 libnuma1 libre2-10 \
+        libpython3.12t64 python3 python3-pip \
+    && find /opt/rocm/lib/hipblaslt/library /opt/rocm/lib/rocblas/library -type f \
+        -name '*gfx*' ! -name '*gfx110*' ! -name '*gfx120*' ! -name '*fallback*' -delete \
+    && rm -f /opt/rocm/lib/rocfft/rocfft_kernel_cache.db \
+    && find /opt/rocm/share/miopen/db -type f -name '*gfx*' \
+        ! -name '*gfx110*' ! -name '*gfx120*' -delete \
+    && rm -rf /var/lib/apt/lists/*
+
+# lw torch uses the ROCm in /opt/rocm and bundles none. torch's `triton` dependency only
+# serves torch.compile, which nothing here calls, so the lock leaves it out. aotriton
+# keeps the kernels for RDNA3 and RDNA4.
+COPY requirements-rocm.txt /tmp/
+RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-rocm.txt \
+    && find /usr/local/lib/python3.12/dist-packages/torch/lib/aotriton.images \
+        -mindepth 1 -maxdepth 1 -type d ! -name 'amd-gfx110*' ! -name 'amd-gfx120*' \
+        -exec rm -rf {} + \
+    && rm /tmp/requirements-rocm.txt
+
+COPY --from=builder /opt/tritonserver /opt/tritonserver
+COPY --from=builder /opt/rocpydecode /opt/rocpydecode
+COPY --from=builder /opt/licences /opt/licences
+COPY collect_licences.sh /tmp/
+RUN /tmp/collect_licences.sh /opt/licences \
+        migraphx=deb:migraphx \
+        rocjpeg=deb:rocjpeg \
+        miopen=deb:miopen-hip \
+        rocblas=deb:rocblas \
+        hipblaslt=deb:hipblaslt \
+        hip-runtime=deb:hip-runtime-amd \
+    && rm /tmp/collect_licences.sh
+COPY licences.README /opt/licences/README
+COPY check_libraries.sh /opt/tritonserver/bin/
+
+ENV PATH=/opt/tritonserver/bin:/opt/rocm/bin:${PATH} \
+    LD_LIBRARY_PATH=/opt/rocm/lib \
+    PYTHONPATH=/opt/rocpydecode/lib \
+    TRITON_SERVER_VERSION=${TRITON_VERSION} \
+    TRITON_CONTAINER_VERSION=${TRITON_CONTAINER_VERSION} \
+    TRITON_PLATFORM=rocm
+
+RUN /opt/tritonserver/bin/check_libraries.sh /opt/tritonserver /opt/rocpydecode
+
+LABEL org.opencontainers.image.title="cv_lakehouse Triton base (ROCm)" \
+      org.opencontainers.image.source="https://github.com/liopeer/cv_lakehouse" \
+      org.opencontainers.image.licenses="BSD-3-Clause AND Apache-2.0 AND MIT AND LicenseRef-vendor" \
+      org.opencontainers.image.documentation="/opt/licences/README"
+
+CMD ["tritonserver", "--model-repository=/models"]

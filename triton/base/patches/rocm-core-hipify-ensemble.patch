@@ -1,0 +1,30 @@
+From b90397727215018ee4bdd63e9dec2a446f326d01 Mon Sep 17 00:00:00 2001
+From: paveltc <Pavel.Tcherniaev@amd.com>
+Date: Fri, 11 Sep 2026 12:01:29 -0500
+Subject: [PATCH] Hipify ensemble_scheduler in ROCm core builds.
+
+ROCm libtritonserver.so compiles only hipified sources, so excluding that directory dropped ensemble support.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ src/CMakeLists.txt | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 183e24603..18b35fbcb 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -85,9 +85,10 @@ if(${TRITON_ENABLE_ROCM})
+   set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+   include(${REPO_ROOT}/cmake/triton_rocm_hipify.cmake)
+   
+-  # Exclude test, ensemble_scheduler, and stub files from hipification
+-  # tritonserver_stub.cc is for a separate library (triton-core-serverstub), not the main library
+-  set(HIPIFY_EXCLUDE_PATTERNS "test/*" "ensemble_scheduler/*" "tritonserver_stub.cc")
++  # Exclude test and stub files from hipification.
++  # tritonserver_stub.cc is for a separate library (triton-core-serverstub), not the main library.
++  # Hipify ensemble_scheduler so ROCm links ensemble (the ROCm library is hipified sources only).
++  set(HIPIFY_EXCLUDE_PATTERNS "test/*" "tritonserver_stub.cc")
+   hipify("src" HIPIFY_EXCLUDE_PATTERNS triton_hipified_cc_srcs triton_hipified_cu_srcs)
+   
+   add_custom_target(generated_hipified_files DEPENDS

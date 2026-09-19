@@ -1,0 +1,28 @@
+This project incorporates the following third-party components:
+
+---
+
+**MobileCLIP**
+- Source: https://github.com/apple/ml-mobileclip
+- License: Apple Machine Learning Research Model License Agreement
+- License file: licences/MOBILECLIP_LICENSE
+- Location: `triton/shared_deps_server/src/shared_deps/mobileclip/`
+- Attribution: Apple Machine Learning Research Model is licensed under the Apple Machine
+  Learning Research Model License Agreement.
+- Modifications:
+  - Vendored as the package `shared_deps.mobileclip`. Every import of `mobileclip`
+    changed to `shared_deps.mobileclip`. Affected files: `__init__.py`, `clip.py`,
+    `image_encoder.py`, `text_encoder.py`, `models/mci.py`, `models/vit.py`,
+    `modules/common/transformer.py`, `modules/image/image_projection.py`,
+    `modules/text/repmixer.py`.
+  - `get_tokenizer` imports `ClipTokenizer` when it is called, not when the package is
+    imported. Affected file: `__init__.py`.
+- Note: the code is unchanged from `mobileclip/` in the upstream repository, apart from
+  the modifications above. The model weights are not part of this repository or of its
+  images. The Triton server downloads them from https://huggingface.co/apple/MobileCLIP-S0
+  on its first start, under the same license.
+
+---
+
+The Triton images add the licenses of every component that they build or install, in
+`/opt/licences/` inside the image. `triton/base/README.md` lists them.

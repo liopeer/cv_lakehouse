@@ -1,0 +1,9 @@
+# The Python packages of the ROCm base image. `make lock` compiles this file into
+# requirements-rocm.txt.
+
+# AMD's lw builds use the ROCm in /opt/rocm and bundle none. 2.11 is the newest for ROCm
+# 7.2.4. torch's `triton` dependency only serves torch.compile, and the lock leaves it out.
+torch==2.11.0+rocm7.2.4.lw.git5fbd98f3
+torchvision==0.26.0+rocm7.2.4.git3d50b215
+# The Python backend expects numpy 1.
+numpy==1.26.4

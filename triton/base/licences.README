@@ -1,0 +1,19 @@
+Licences
+========
+
+This image contains software under several licences. This directory holds the licence
+and notice files of each component, in one directory per component.
+
+- triton-*: Triton Inference Server and its backends, BSD-3-Clause. Built from source.
+- triton-linked-libraries: the libraries that Triton links statically, such as gRPC,
+  abseil, protobuf, re2, curl, libevent, libevhtp, prometheus-cpp and nlohmann_json,
+  with their NOTICE files.
+- boost: the Boost headers that Triton is built with.
+- onnxruntime, rocpydecode, migraphx, rocjpeg, miopen, rocblas, hipblaslt, hip-runtime:
+  the ROCm image only.
+- tensorrt, cuda-runtime: the CUDA image only, under NVIDIA's licences for the
+  redistributable runtime libraries.
+
+Every apt package also keeps its licence at /usr/share/doc/<package>/copyright, and the
+ROCm packages at /opt/rocm/share/doc/<package>/. Every Python package keeps its licence
+in its dist-info directory under /usr/local/lib/python3.12/dist-packages.

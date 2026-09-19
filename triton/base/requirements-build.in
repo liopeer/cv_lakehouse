@@ -1,0 +1,9 @@
+# The Python packages that build Triton, in both builder stages. `make lock` compiles
+# this file into requirements-build.txt.
+
+# build.py
+distro
+requests
+# The CMake and patchelf that build.py's own build image installs.
+cmake==4.0.3
+patchelf==0.17.2

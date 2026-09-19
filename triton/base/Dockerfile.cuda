@@ -1,0 +1,166 @@
+# check=skip=InvalidDefaultArgInFrom
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# The CUDA base image: Triton 25.12 with the ensemble, Python, TensorRT and DALI
+# backends, TensorRT for building engines, DALI for serializing pipelines, and CPU
+# torch. `make build PLATFORM=cuda` passes every argument from versions.env.
+#
+# It derives from the public nvidia/cuda images, not from nvcr.io, so the NVIDIA Deep
+# Learning Container License does not apply. The builder compiles Triton on the CUDA
+# SDK. The runtime image is the CUDA runtime with the TensorRT runtime.
+
+ARG CUDA_DEVEL_IMAGE
+ARG CUDA_RUNTIME_IMAGE
+
+# ---------------------------------------------------------------------------------------
+FROM ${CUDA_DEVEL_IMAGE} AS builder
+
+ARG UBUNTU_SNAPSHOT
+ARG TRITON_VERSION
+ARG TRITON_CONTAINER_VERSION
+ARG TRITON_SERVER_COMMIT
+ARG TRITON_CORE_COMMIT
+ARG TRITON_COMMON_COMMIT
+ARG TRITON_BACKEND_COMMIT
+ARG TRITON_THIRD_PARTY_COMMIT
+ARG TRITON_PYTHON_BACKEND_COMMIT
+ARG TRITON_TENSORRT_BACKEND_COMMIT
+ARG TRITON_DALI_BACKEND_COMMIT
+ARG TENSORRT_APT_VERSION
+ARG BOOST_ARCHIVE
+ARG BOOST_ARCHIVE_SHA256
+
+ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1 CMAKE_POLICY_VERSION_MINIMUM=3.5
+RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
+
+# The packages that build.py's own build image installs, as far as this build uses them,
+# plus the TensorRT headers.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        autoconf automake build-essential ca-certificates curl git gperf \
+        libarchive-dev libb64-dev libcurl4-openssl-dev libgoogle-perftools-dev \
+        libnuma-dev libre2-dev libssl-dev libtool libxml2-dev pkg-config \
+        python3-dev python3-pip python3-setuptools python3-wheel \
+        rapidjson-dev unzip wget zlib1g-dev \
+        "libnvinfer10=${TENSORRT_APT_VERSION}" \
+        "libnvinfer-dev=${TENSORRT_APT_VERSION}" \
+        "libnvinfer-headers-dev=${TENSORRT_APT_VERSION}" \
+        "libnvinfer-plugin10=${TENSORRT_APT_VERSION}" \
+        "libnvinfer-plugin-dev=${TENSORRT_APT_VERSION}" \
+        "libnvinfer-headers-plugin-dev=${TENSORRT_APT_VERSION}" \
+    && rm -rf /var/lib/apt/lists/*
+
+# DALI comes from the same lock as in the runtime image. The DALI backend builds against
+# it instead of downloading its own, so the backend and our pipelines use one DALI.
+COPY requirements-build.txt requirements-cuda.txt /tmp/
+RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-build.txt \
+    && pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-cuda.txt
+
+RUN curl -fsSL -o /tmp/boost.tar.gz "${BOOST_ARCHIVE}" \
+    && echo "${BOOST_ARCHIVE_SHA256}  /tmp/boost.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/boost.tar.gz -C /tmp \
+    && mv /tmp/boost_*/boost /usr/include/boost \
+    && mkdir -p /src/boost \
+    && mv /tmp/boost_*/LICENSE_1_0.txt /src/boost/ \
+    && rm -rf /tmp/boost*
+
+COPY fetch_sources.sh /src/
+RUN /src/fetch_sources.sh https://github.com/triton-inference-server/ <<EOF
+server           https://github.com/triton-inference-server/server           ${TRITON_SERVER_COMMIT}           pinned
+core             https://github.com/triton-inference-server/core             ${TRITON_CORE_COMMIT}             pinned
+common           https://github.com/triton-inference-server/common           ${TRITON_COMMON_COMMIT}           pinned
+backend          https://github.com/triton-inference-server/backend          ${TRITON_BACKEND_COMMIT}          pinned
+third_party      https://github.com/triton-inference-server/third_party      ${TRITON_THIRD_PARTY_COMMIT}      pinned
+python_backend   https://github.com/triton-inference-server/python_backend   ${TRITON_PYTHON_BACKEND_COMMIT}   pinned
+tensorrt_backend https://github.com/triton-inference-server/tensorrt_backend ${TRITON_TENSORRT_BACKEND_COMMIT} pinned
+dali_backend     https://github.com/triton-inference-server/dali_backend     ${TRITON_DALI_BACKEND_COMMIT}     pinned
+EOF
+
+# No GPU metrics, because those need DCGM. CUDA 13 supports compute capability 7.5 and up.
+RUN git clone --quiet --branch pinned /src/repos/server.git /src/server \
+    && python3 /src/server/build.py \
+        --no-container-build \
+        --build-dir=/tmp/tritonbuild \
+        --install-dir=/opt/tritonserver \
+        --version="${TRITON_VERSION}" \
+        --container-version="${TRITON_CONTAINER_VERSION}" \
+        --enable-gpu --min-compute-capability=7.5 \
+        --enable-logging --enable-stats --enable-metrics --enable-cpu-metrics \
+        --endpoint=grpc --endpoint=http \
+        --repo-tag=common:pinned --repo-tag=core:pinned \
+        --repo-tag=backend:pinned --repo-tag=thirdparty:pinned \
+        --backend=ensemble --backend=python:pinned \
+        --backend=tensorrt:pinned --backend=dali:pinned \
+        --override-backend-cmake-arg=dali:TRITON_DALI_SKIP_DOWNLOAD=ON \
+        --build-parallel="$(nproc)"
+
+COPY collect_licences.sh /src/
+RUN /src/collect_licences.sh /opt/licences \
+        triton-server=git:/src/repos/server.git \
+        triton-core=git:/src/repos/core.git \
+        triton-common=git:/src/repos/common.git \
+        triton-backend=git:/src/repos/backend.git \
+        triton-third-party=git:/src/repos/third_party.git \
+        triton-python-backend=git:/src/repos/python_backend.git \
+        triton-tensorrt-backend=git:/src/repos/tensorrt_backend.git \
+        triton-dali-backend=git:/src/repos/dali_backend.git \
+        triton-linked-libraries=tree:/tmp/tritonbuild/tritonserver/build/third-party-src \
+        boost=/src/boost
+
+# ---------------------------------------------------------------------------------------
+FROM ${CUDA_RUNTIME_IMAGE}
+
+ARG UBUNTU_SNAPSHOT
+ARG TENSORRT_APT_VERSION
+ARG TRITON_VERSION
+ARG TRITON_CONTAINER_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1
+RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
+
+# One TensorRT, for the backend and for building engines in Python. The ONNX parser
+# builds an engine from the exported ONNX. The Python backend needs libarchive and
+# libpython.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        "libnvinfer10=${TENSORRT_APT_VERSION}" \
+        "libnvinfer-plugin10=${TENSORRT_APT_VERSION}" \
+        "libnvinfer-vc-plugin10=${TENSORRT_APT_VERSION}" \
+        "libnvonnxparsers10=${TENSORRT_APT_VERSION}" \
+        "python3-libnvinfer=${TENSORRT_APT_VERSION}" \
+        libarchive13t64 libb64-0d libcurl4t64 libgomp1 libnuma1 libre2-10 \
+        libpython3.12t64 python3 python3-pip curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-cuda.txt /tmp/
+RUN pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-cuda.txt \
+    && rm /tmp/requirements-cuda.txt
+
+COPY --from=builder /opt/tritonserver /opt/tritonserver
+COPY --from=builder /opt/licences /opt/licences
+COPY collect_licences.sh /tmp/
+RUN /tmp/collect_licences.sh /opt/licences \
+        tensorrt=deb:libnvinfer10 \
+        cuda-runtime=deb:cuda-cudart-13-1 \
+    && rm /tmp/collect_licences.sh
+COPY licences.README /opt/licences/README
+COPY check_libraries.sh /opt/tritonserver/bin/
+
+# The DALI backend links the libdali of the DALI wheel.
+ENV PATH=/opt/tritonserver/bin:${PATH} \
+    LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/dali:${LD_LIBRARY_PATH} \
+    TRITON_SERVER_VERSION=${TRITON_VERSION} \
+    TRITON_CONTAINER_VERSION=${TRITON_CONTAINER_VERSION} \
+    TRITON_PLATFORM=cuda
+
+RUN /opt/tritonserver/bin/check_libraries.sh /opt/tritonserver
+
+LABEL org.opencontainers.image.title="cv_lakehouse Triton base (CUDA)" \
+      org.opencontainers.image.source="https://github.com/liopeer/cv_lakehouse" \
+      org.opencontainers.image.licenses="BSD-3-Clause AND Apache-2.0 AND MIT AND LicenseRef-vendor" \
+      org.opencontainers.image.documentation="/opt/licences/README"
+
+CMD ["tritonserver", "--model-repository=/models"]
