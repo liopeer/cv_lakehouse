@@ -98,6 +98,9 @@ Silver sends an absolute image path, so compose mounts `$CV_LAKEHOUSE_ROOT` read
 the same path inside the container. If a bronze directory is a symlink to a path outside
 the root, add a mount for that path to `docker-compose.yml`.
 
+Create the lake root before `make up`. Compose refuses to create it, because the daemon
+creates a directory that belongs to root, and the lake belongs to the host user.
+
 ## Export
 
 `shared_deps.export_mixins` holds two mixins for an `nn.Module` with one input and a dynamic

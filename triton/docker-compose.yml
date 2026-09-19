@@ -17,7 +17,16 @@ x-triton-server: &triton-server
     # Silver sends IMAGE_PATH, so the lake must resolve at the same absolute path
     # inside the container. A bronze directory symlinked to somewhere outside the
     # root needs a mount of its own here.
-    - ${CV_LAKEHOUSE_ROOT:?set CV_LAKEHOUSE_ROOT to an absolute path}:${CV_LAKEHOUSE_ROOT}:ro
+    #
+    # The daemon runs as root, so a missing source becomes a lake root that the host
+    # user cannot write. The lake belongs to the host user, so the mount refuses to
+    # create it, and compose reports the missing path instead.
+    - type: bind
+      source: ${CV_LAKEHOUSE_ROOT:?set CV_LAKEHOUSE_ROOT to an absolute path}
+      target: ${CV_LAKEHOUSE_ROOT}
+      read_only: true
+      bind:
+        create_host_path: false
   # Python-backend BLS sub-requests each allocate their own shared-memory
   # region; the 64MB docker default is exhausted quickly under concurrent
   # fan-out (see mobileclip_s0/1/model.py's per-image sub-request semaphore).
