@@ -1,0 +1,9 @@
+# The Python packages of the ROCm image. `make lock` compiles this file into
+# requirements-rocm.txt, which the image installs. shared_deps installs on its own. The
+# base image holds torch, torchvision and numpy.
+
+open-clip-torch>=2.20
+timm>=0.9.5
+onnx>=1.16
+onnxscript>=0.1
+huggingface_hub>=0.34

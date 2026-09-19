@@ -19,18 +19,19 @@ _EMBEDDING_OUTPUT = "EMBEDDING"
 _INTERNAL_EMBEDDING_OUTPUT = "embeddings"
 _MAX_CONCURRENT_SUB_REQUESTS_PARAMETER = "max_concurrent_sub_requests"
 
-# The DALI preprocessing model's CROP_* inputs are required (not optional),
+# The image preprocessing model's CROP_* inputs are required (not optional),
 # since a single ragged-length UINT8 IMAGE_PATH row can't be batched together
 # with others the way TYPE_STRING can -- each image is sent to the ensemble as
 # its own single-image request (see _infer_one_image), and this sentinel means
-# "no crop requested", resolved against the full image inside the DALI graph.
+# "no crop requested", resolved against the full image by the preprocessing model.
 _NO_CROP = -1
 
 # Caps concurrent BLS sub-requests per model instance. Each in-flight sub-request
 # owns a python-backend shared-memory region, so an unbounded asyncio.gather over
 # a large request (e.g. thousands of image paths in one call) can exhaust
-# /dev/shm regardless of its configured size. 256 matches the TRT/DALI backends'
-# preferred_batch_size, which is the most concurrency that actually helps.
+# /dev/shm regardless of its configured size. 256 matches the preferred_batch_size
+# of the encoder and preprocessing models, which is the most concurrency that
+# actually helps.
 _DEFAULT_MAX_CONCURRENT_SUB_REQUESTS = 256
 
 
@@ -67,8 +68,8 @@ class TritonPythonModel:
 
             # Fan the images in this request out as concurrent BLS sub-requests
             # (rather than one call carrying all of them) so Triton's dynamic
-            # batcher can still coalesce them into a single batched DALI/TensorRT
-            # execution -- a single ragged-per-row UINT8 IMAGE_PATH tensor can't
+            # batcher can still coalesce them into one batched preprocessing and
+            # encoder execution -- a single ragged-per-row UINT8 IMAGE_PATH tensor can't
             # represent images of different path lengths the way TYPE_STRING did.
             # The semaphore bounds how many of these are in flight at once.
             embeddings = await asyncio.gather(
@@ -87,8 +88,8 @@ class TritonPythonModel:
             _raise_if_crop_inputs_present(request=request)
             texts = _decode_string_array(text_input.as_numpy())
             # Fan the texts out the same way as images, so the dynamic batcher
-            # on _mobileclip_s0_text_backend_trt can coalesce concurrent
-            # single-string sub-requests into one batched TensorRT execution.
+            # on _mobileclip_s0_text_backend can coalesce concurrent
+            # single-string sub-requests into one batched execution.
             embeddings = await asyncio.gather(
                 *(self._infer_one_text(text=text) for text in texts)
             )

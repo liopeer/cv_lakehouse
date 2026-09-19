@@ -1,0 +1,30 @@
+##
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025–2026 Lionel Peer
+##
+
+# The CUDA image. The base image in `base/` holds Triton with the TensorRT, DALI and
+# Python backends, the TensorRT Python package, DALI and a CPU build of torch. torch only
+# exports ONNX and tokenises text.
+#
+# The image holds no weights and no engine. `entrypoint.sh` builds both engines and
+# both DALI pipelines on the first start, for the GPU it finds, and caches them in
+# /cache. An engine only runs on the GPU architecture and the TensorRT version that
+# built it, so it cannot be built in CI, which has no GPU.
+ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:cuda-r25.12-20260919@sha256:52b7513db2e15c6497f54ae2dd1f37dbacf190e05fbbbc526c08a12548f6e290
+FROM ${BASE_IMAGE}
+
+WORKDIR /opt/mobileclip
+
+# requirements-cuda.txt pins every package with its hash, and `make lock` writes it. It
+# leaves out the packages of the base image. shared_deps goes in on its own with
+# --no-deps, which skips pillow-simd.
+COPY requirements-cuda.txt /opt/mobileclip/
+RUN pip3 install --no-cache-dir --no-deps --require-hashes -r requirements-cuda.txt
+COPY shared_deps_server/ /opt/mobileclip/shared_deps_server/
+RUN pip3 install --no-cache-dir --no-deps ./shared_deps_server/
+
+COPY model_repository/common/ model_repository/cuda/ /models/
+COPY dali_pipeline.py entrypoint.sh version.txt /opt/mobileclip/
+
+ENTRYPOINT ["/opt/mobileclip/entrypoint.sh"]

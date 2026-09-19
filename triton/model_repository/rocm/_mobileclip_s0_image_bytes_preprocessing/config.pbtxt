@@ -1,0 +1,32 @@
+name: "_mobileclip_s0_image_bytes_preprocessing"
+backend: "python"
+parameters {
+  key: "input_kind"
+  value: {
+    string_value: "bytes"
+  }
+}
+max_batch_size: 256
+dynamic_batching {
+  preferred_batch_size: [ 256 ]
+}
+input [
+  {
+    name: "IMAGE_BYTES"
+    data_type: TYPE_UINT8
+    dims: [ -1 ]
+  }
+]
+output [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [ 3, 256, 256 ]
+  }
+]
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

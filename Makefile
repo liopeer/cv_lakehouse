@@ -65,7 +65,9 @@ studio:  ## Browse silver in LightlyStudio. make studio DATASETS="wider_face"
 	uv run tools/studio.py $(DATASETS)
 
 # The MobileCLIP server that silver embeds with. `triton/README.md` has the details.
-# It needs a Linux host with docker and the NVIDIA runtime.
+# It needs a Linux host with docker, and an NVIDIA or an AMD GPU. The ROCm image runs
+# on a host with /dev/kfd, and the CUDA image runs otherwise. PLATFORM=cuda or
+# PLATFORM=rocm overrides the choice.
 triton-up:  ## Build and start the Triton server. gRPC on 8011, HTTP on 8010.
 	$(MAKE) -C triton up
 

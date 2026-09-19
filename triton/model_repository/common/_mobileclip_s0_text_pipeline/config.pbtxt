@@ -24,7 +24,7 @@ ensemble_scheduling {
       output_map { key: "tokens" value: "tokens" }
     },
     {
-      model_name: "_mobileclip_s0_text_backend_trt"
+      model_name: "_mobileclip_s0_text_backend"
       model_version: -1
       input_map { key: "tokens" value: "tokens" }
       output_map { key: "embeddings" value: "embeddings" }

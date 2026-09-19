@@ -17,9 +17,8 @@ class TritonPythonModel:
     def execute(self, requests):
         responses = []
         for request in requests:
-            text_np = pb_utils.get_input_tensor_by_name(request, "text").as_numpy()
-            text_str = text_np[0].decode("utf-8")
-            tokens = self.preprocessor(text_str)  # [77] int64
-            out_tensor = pb_utils.Tensor("tokens", tokens)
+            texts = pb_utils.get_input_tensor_by_name(request, "text").as_numpy().reshape(-1)
+            tokens = np.stack([self.preprocessor(text.decode("utf-8")) for text in texts])
+            out_tensor = pb_utils.Tensor("tokens", tokens)  # [N, 77] int64
             responses.append(pb_utils.InferenceResponse([out_tensor]))
         return responses

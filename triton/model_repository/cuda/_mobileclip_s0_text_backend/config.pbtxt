@@ -1,4 +1,4 @@
-name: "_mobileclip_s0_text_backend_trt"
+name: "_mobileclip_s0_text_backend"
 platform: "tensorrt_plan"
 max_batch_size: 256
 dynamic_batching {
