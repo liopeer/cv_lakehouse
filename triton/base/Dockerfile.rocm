@@ -19,6 +19,7 @@ ARG UBUNTU_IMAGE
 FROM ${ROCM_DEVEL_IMAGE} AS builder
 
 ARG UBUNTU_SNAPSHOT
+ARG ROCM_VERSION
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
 ARG TRITON_COMMON_COMMIT
@@ -41,8 +42,11 @@ ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1 CMAKE_POLICY_VERS
 RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
 
 # The packages that build.py's own build image installs, as far as this build uses them,
-# plus hipify and the rocJPEG headers.
-RUN apt-get update \
+# plus hipify and the rocJPEG headers. The ROCm image has the ROCm repository with its key.
+# rocjpeg needs mesa-amdgpu-va-drivers, which the graphics repository publishes.
+RUN echo "deb [arch=amd64] https://repo.radeon.com/graphics/${ROCM_VERSION}/ubuntu noble main" \
+        > /etc/apt/sources.list.d/rocm-graphics.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         autoconf automake build-essential ca-certificates curl git gperf \
         libarchive-dev libb64-dev libcurl4-openssl-dev libgoogle-perftools-dev \
@@ -152,18 +156,27 @@ RUN /src/collect_licences.sh /opt/licences \
 FROM ${UBUNTU_IMAGE}
 
 ARG UBUNTU_SNAPSHOT
+ARG CA_CERTIFICATES_APT_VERSION
+ARG OPENSSL_APT_VERSION
 ARG ROCM_VERSION
 ARG ROCM_APT_SUFFIX
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1
-RUN echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
+
+# The snapshot is only reachable over HTTPS, so the CA certificates come first, from the
+# plain archive and at the versions of the snapshot.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        "ca-certificates=${CA_CERTIFICATES_APT_VERSION}" "openssl=${OPENSSL_APT_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "APT::Snapshot \"${UBUNTU_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50snapshot
 
 # The versioned ROCm repositories never change. rocjpeg needs mesa-amdgpu-va-drivers,
 # which the graphics repository publishes.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && apt-get install -y --no-install-recommends curl gnupg \
     && curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /etc/apt/keyrings/rocm.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${ROCM_VERSION} noble main" \
         > /etc/apt/sources.list.d/rocm.list \
