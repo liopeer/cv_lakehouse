@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.0](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.1.0...triton-v0.2.0) (2026-09-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **triton:** drop the compose file ([#12](https://github.com/liopeer/cv_lakehouse/issues/12))
+
+### Bug Fixes
+
+* **triton:** decode every image on the cpu ([#11](https://github.com/liopeer/cv_lakehouse/issues/11)) ([8289753](https://github.com/liopeer/cv_lakehouse/commit/8289753b6501e0a02aca864af28aebfd7a48828b))
+* **triton:** start a released image with make up ([#8](https://github.com/liopeer/cv_lakehouse/issues/8)) ([c17141b](https://github.com/liopeer/cv_lakehouse/commit/c17141b7b8e7af3c3880fac733e35b27a369640d))
+* **triton:** stop compose from creating the lake root ([#10](https://github.com/liopeer/cv_lakehouse/issues/10)) ([2d5933e](https://github.com/liopeer/cv_lakehouse/commit/2d5933e965aee1068412bc68dec9ca07f2c3877e))
+
+
+### Refactoring
+
+* **triton:** drop the compose file ([#12](https://github.com/liopeer/cv_lakehouse/issues/12)) ([e94372c](https://github.com/liopeer/cv_lakehouse/commit/e94372c9169d28e17f994aeed004fdee92a3d1c2))
+
 ## 0.1.0 (2026-09-19)
 
 
