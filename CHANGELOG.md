@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/liopeer/cv_lakehouse/compare/v0.1.0...v0.2.0) (2026-09-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **triton:** drop the compose file ([#12](https://github.com/liopeer/cv_lakehouse/issues/12))
+
+### Refactoring
+
+* **triton:** drop the compose file ([#12](https://github.com/liopeer/cv_lakehouse/issues/12)) ([e94372c](https://github.com/liopeer/cv_lakehouse/commit/e94372c9169d28e17f994aeed004fdee92a3d1c2))
+
 ## 0.1.0 (2026-09-19)
 
 
