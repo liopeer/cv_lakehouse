@@ -15,7 +15,6 @@ from shared_deps.mobileclip_rocm_preprocessing import (
     NO_CROP,
     MobileCLIPImageDecoder,
     crop_image,
-    is_sequential_jpeg,
     preprocess_images,
 )
 
@@ -37,7 +36,7 @@ def _encode_image(
 
 @pytest.fixture
 def cpu_decoder() -> MobileCLIPImageDecoder:
-    return MobileCLIPImageDecoder(device=torch.device("cpu"), use_rocjpeg=False)
+    return MobileCLIPImageDecoder(device=torch.device("cpu"), decode_threads=4)
 
 
 class TestMobileCLIPImageDecoder:
@@ -61,20 +60,31 @@ class TestMobileCLIPImageDecoder:
 
         assert [image.shape for image in images] == [(3, 20, 10), (3, 40, 30), (3, 60, 50)]
 
+    def test_decodes_a_progressive_jpeg(self, cpu_decoder):
+        encoded = _encode_image(
+            width=40, height=30, image_format="JPEG", progressive=True
+        )
 
-class TestIsSequentialJpeg:
-    def test_accepts_a_baseline_jpeg(self):
-        assert is_sequential_jpeg(_encode_image(width=8, height=8, image_format="JPEG"))
+        (image,) = cpu_decoder.decode_images([encoded])
 
-    def test_rejects_a_progressive_jpeg(self):
-        encoded = _encode_image(width=8, height=8, image_format="JPEG", progressive=True)
+        assert image.shape == (3, 30, 40)
 
-        assert not is_sequential_jpeg(encoded)
+    def test_keeps_the_order_of_a_large_batch(self, cpu_decoder):
+        # A batch of this size faulted the GPU decoder that this path replaced.
+        encoded = [
+            _encode_image(
+                width=8 + index,
+                height=16 + index,
+                image_format="JPEG" if index % 2 else "PNG",
+            )
+            for index in range(128)
+        ]
 
-    def test_rejects_other_formats_and_truncated_files(self):
-        assert not is_sequential_jpeg(_encode_image(width=8, height=8, image_format="PNG"))
-        assert not is_sequential_jpeg(b"\xff\xd8\xff\xe0")
-        assert not is_sequential_jpeg(b"")
+        images = cpu_decoder.decode_images(encoded)
+
+        assert [image.shape for image in images] == [
+            (3, 16 + index, 8 + index) for index in range(128)
+        ]
 
 
 class TestCropImage:
