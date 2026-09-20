@@ -38,31 +38,30 @@ vendors Apple's `mobileclip` package, under the licence beside it. The two direc
 merged here, so the Dockerfiles build from this directory and the Makefile exports with the
 local project.
 
-## Run
+## Build
 
 The server needs a Linux host with docker, and an NVIDIA GPU with the NVIDIA container
 runtime or an AMD GPU with ROCm. The CUDA image needs a GPU of compute capability 7.5 or
 newer, and a driver that supports CUDA 13.1, which is R580 or newer.
 
 ```bash
-export CV_LAKEHOUSE_ROOT=/absolute/path/to/the/lake
-make up                        # build this checkout, and start it
-make up TRITON_VERSION=0.1.0   # or pull that release, and start it
+make image                  # build this checkout as :dev-rocm or :dev-cuda
+make image PLATFORM=cuda    # or build the other platform
 ```
 
-`make up` starts the ROCm image on a host with `/dev/kfd`, and the CUDA image otherwise.
-`make up PLATFORM=cuda` overrides the choice. `make down`, `make logs` and `make image`
-take the same variable. In production, pin `TRITON_VERSION` to an X.Y.Z release.
+`make image` builds the ROCm image on a host with `/dev/kfd`, and the CUDA image
+otherwise.
 
-The ROCm container joins the render group of the host, which owns `/dev/kfd`. `make up`
-passes the ID of that group as `RENDER_GID`. A direct `docker compose` call passes it too:
+The deployment stack runs the server. It holds the compose file, and it pins
+`TRITON_VERSION` to an X.Y.Z release. This directory builds and tests the image, and it
+starts nothing.
 
-```bash
-RENDER_GID=$(getent group render | cut -d: -f3) docker compose --profile rocm up -d
-```
+A container needs the lake bound at the same absolute path inside and outside, because a
+bronze manifest holds absolute paths. The ROCm container also needs `/dev/kfd`,
+`/dev/dri`, the render group of the host, `seccomp=unconfined` and a 2 GB `/dev/shm`.
 
-The server listens on `8010` HTTP, `8011` gRPC and `8012` metrics. From the repository
-root, `make triton-up` does the same as `make up`.
+The server listens on `8000` HTTP, `8001` gRPC and `8002` metrics. The deployment stack
+publishes them on `8010`, `8011` and `8012`.
 
 ## Images
 
@@ -95,12 +94,9 @@ architecture. The ROCm image also keeps the compiled MIGraphX programs there. A 
 reuses them. A new release or a different GPU builds again. A model only runs on the GPU
 architecture and the library versions that built it, so CI cannot build one.
 
-Silver sends an absolute image path, so compose mounts `$CV_LAKEHOUSE_ROOT` read only at
-the same path inside the container. If a bronze directory is a symlink to a path outside
-the root, add a mount for that path to `docker-compose.yml`.
-
-Create the lake root before `make up`. Compose refuses to create it, because the daemon
-creates a directory that belongs to root, and the lake belongs to the host user.
+Silver sends an absolute image path, so the stack mounts `$CV_LAKEHOUSE_ROOT` read only
+at the same path inside the container. If a bronze directory is a symlink to a path
+outside the root, add a mount for that path to the compose file of the stack.
 
 ## Export
 

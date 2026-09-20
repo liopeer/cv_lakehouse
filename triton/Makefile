@@ -3,7 +3,7 @@
 ## Copyright (c) 2025-2026 Lionel Peer
 ##
 
-.PHONY: image up down logs test lock
+.PHONY: image test lock
 
 # The lock files that the images install. A new run keeps every pin that still
 # resolves. `make lock UPGRADE=--upgrade` moves them to the newest versions.
@@ -18,27 +18,11 @@ lock_against_base = --constraint base/requirements-$(1).txt \
 	$(foreach package,$(shell sed -n 's/^\([a-z0-9._-]*\)==.*/\1/p' base/requirements-$(1).txt),--no-emit-package $(package))
 ROCM_VERSION := $(shell sed -n 's/^ROCM_VERSION=//p' base/versions.env)
 
-# An AMD GPU shows up as /dev/kfd. `make up PLATFORM=cuda` overrides the choice.
+# An AMD GPU shows up as /dev/kfd. `make image PLATFORM=cuda` overrides the choice.
 PLATFORM ?= $(if $(wildcard /dev/kfd),rocm,cuda)
-COMPOSE := RENDER_GID=$(shell getent group render | cut -d: -f3) \
-	docker compose --profile $(PLATFORM)
-
-# Compose reads the tag suffix from TRITON_VERSION, so every recipe passes it on.
-export TRITON_VERSION
 
 image:
 	docker build -f Dockerfile.$(PLATFORM) -t ghcr.io/liopeer/cv_lakehouse-triton:dev-$(PLATFORM) .
-
-# Builds this checkout. The first start then builds the models into the cache volume.
-# `make up TRITON_VERSION=X.Y.Z` pulls that release, and builds nothing.
-up:
-	$(COMPOSE) up -d $(if $(TRITON_VERSION),--pull always --no-build,--build)
-
-down:
-	$(COMPOSE) down
-
-logs:
-	$(COMPOSE) logs -f triton-$(PLATFORM)
 
 test:
 	uv run --frozen --directory shared_deps_server --extra export pytest
