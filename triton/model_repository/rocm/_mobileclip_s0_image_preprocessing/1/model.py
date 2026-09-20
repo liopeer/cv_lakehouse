@@ -20,6 +20,7 @@ from shared_deps.mobileclip_rocm_preprocessing import (
 )
 
 _INPUT_KIND_PARAMETER = "input_kind"
+_DECODE_THREADS_PARAMETER = "decode_threads"
 _CROP_NAMES = ("CROP_X", "CROP_Y", "CROP_WIDTH", "CROP_HEIGHT")
 _OUTPUT_NAME = "images"
 
@@ -27,13 +28,17 @@ _OUTPUT_NAME = "images"
 class TritonPythonModel:
     def initialize(self, args):
         model_config = json.loads(args["model_config"])
-        self._input_kind = model_config["parameters"][_INPUT_KIND_PARAMETER]["string_value"]
+        parameters = model_config["parameters"]
+        self._input_kind = parameters[_INPUT_KIND_PARAMETER]["string_value"]
         if self._input_kind not in ("path", "bytes"):
             raise pb_utils.TritonModelException(
                 f"{_INPUT_KIND_PARAMETER} must be 'path' or 'bytes'."
             )
         self._device = torch.device("cuda", int(args["model_instance_device_id"]))
-        self._decoder = MobileCLIPImageDecoder(device=self._device, use_rocjpeg=True)
+        self._decoder = MobileCLIPImageDecoder(
+            device=self._device,
+            decode_threads=int(parameters[_DECODE_THREADS_PARAMETER]["string_value"]),
+        )
 
     def execute(self, requests):
         encoded_images = []
@@ -56,6 +61,9 @@ class TritonPythonModel:
             responses.append(pb_utils.InferenceResponse([output]))
             offset += size
         return responses
+
+    def finalize(self):
+        self._decoder.close()
 
     def _read_request(self, request):
         if self._input_kind == "bytes":

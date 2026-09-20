@@ -17,17 +17,18 @@ TEXT        -> CPU tokenisation (Python backend)     -> TensorRT text encoder  -
 ```
 
 The ROCm image runs ONNX Runtime with its MIGraphX execution provider. It has no DALI, so
-a Python model decodes a JPEG with rocJPEG and resizes it with torchvision on the GPU:
+a Python model decodes with Pillow on the CPU and resizes with torchvision on the GPU:
 
 ```text
-IMAGE_PATH  -> rocJPEG + torchvision: decode, crop, resize, normalise -> ONNX image encoder -> EMBEDDING
-IMAGE_BYTES -> rocJPEG + torchvision: decode, resize, normalise       -> ONNX image encoder -> EMBEDDING
-TEXT        -> CPU tokenisation (Python backend)                      -> ONNX text encoder  -> EMBEDDING
+IMAGE_PATH  -> Pillow + torchvision: decode, crop, resize, normalise -> ONNX image encoder -> EMBEDDING
+IMAGE_BYTES -> Pillow + torchvision: decode, resize, normalise       -> ONNX image encoder -> EMBEDDING
+TEXT        -> CPU tokenisation (Python backend)                     -> ONNX text encoder  -> EMBEDDING
 ```
 
-rocJPEG decodes sequential JPEG only. The ROCm image decodes every other image on the
-CPU, such as a PNG or a progressive JPEG. The two images resize with different code, so
-their embeddings differ slightly.
+The decode runs over a thread pool. The `decode_threads` parameter of
+`_mobileclip_s0_image_preprocessing` sets its size, and it defaults to 4. AMD's torchvision
+carries no libjpeg, so Pillow decodes instead. The two images resize with different code,
+so their embeddings differ slightly.
 
 Text tokenisation has no DALI equivalent, so it runs on the CPU before the text encoder.
 

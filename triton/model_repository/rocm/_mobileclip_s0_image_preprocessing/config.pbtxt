@@ -6,6 +6,12 @@ parameters {
     string_value: "path"
   }
 }
+parameters {
+  key: "decode_threads"
+  value: {
+    string_value: "4"
+  }
+}
 max_batch_size: 256
 dynamic_batching {
   preferred_batch_size: [ 256 ]
