@@ -8,7 +8,7 @@
 UV_RUN := uv run --frozen
 
 .PHONY: help sync lock license-headers format format-check lint lint-fix typecheck test \
-	defs dev image studio triton-up triton-down triton-logs check clean
+	defs dev image studio check clean
 
 help:  ## List targets.
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -63,19 +63,6 @@ image:  ## Build the Dagster code location image, as the release does.
 # with its own dependencies, so the package needs no GUI: uv reads them from its header.
 studio:  ## Browse silver in LightlyStudio. make studio DATASETS="wider_face"
 	uv run tools/studio.py $(DATASETS)
-
-# The MobileCLIP server that silver embeds with. `triton/README.md` has the details.
-# It needs a Linux host with docker, and an NVIDIA or an AMD GPU. The ROCm image runs
-# on a host with /dev/kfd, and the CUDA image runs otherwise. PLATFORM=cuda or
-# PLATFORM=rocm overrides the choice.
-triton-up:  ## Build and start the Triton server. gRPC on 8011, HTTP on 8010.
-	$(MAKE) -C triton up
-
-triton-down:  ## Stop the Triton server.
-	$(MAKE) -C triton down
-
-triton-logs:  ## Follow the Triton server log.
-	$(MAKE) -C triton logs
 
 check: format-check lint typecheck test defs  ## Run every check.
 

@@ -126,20 +126,20 @@ duckdb -c "select b.class_name, count(*)
 ```
 
 A [Triton](triton/README.md) server does the work. It is in `triton/`, it runs the two
-encoders as TensorRT engines, and it decodes, crops, resizes and normalises on the GPU,
-so this repository sends a path and a box and never opens an image.
+encoders as TensorRT engines, and it crops, resizes and normalises on the GPU, so this
+repository sends a path and a box and never opens an image. The deployment stack starts
+it, and `triton/` builds the image.
 
 ```bash
-make triton-up     # on a host with a GPU. The first start builds the engines.
 export CV_LAKEHOUSE_TRITON_URL=localhost:8011
 ```
 
 Silver reads the URL and skips the embedding when it is unset, so a machine with no
 server still builds the layer. The two counts land in the asset metadata either way.
 
-The server resolves the path itself, so compose mounts `$CV_LAKEHOUSE_ROOT` read only at
-the same path inside the container. If a bronze directory is a symlink to a path outside
-the root, add a mount for that path to `triton/docker-compose.yml`.
+The server resolves the path itself, so the stack mounts `$CV_LAKEHOUSE_ROOT` read only
+at the same path inside the container. If a bronze directory is a symlink to a path
+outside the root, add a mount for that path to the compose file of the stack.
 
 Nothing is cached. A silver rematerialisation embeds the dataset again, which is the
 price of leaving the versioning out. The model name is part of the silver `code_version`,
