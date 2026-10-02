@@ -51,14 +51,14 @@ engines on the first start. See [triton/README.md](triton/README.md).
 | --- | --- | --- |
 | bronze | the raw dataset, complete, as published | download it, or link a complete copy |
 | silver | one dataset, normalised | four Parquet files per split, on the class registry |
+| gold | every dataset in one table set | two Parquet files per dataset and split, with a role |
 
 Bronze holds every file that a dataset publishes, byte for byte, in the layout of a
 manual download. See [Bronze](#bronze) below. Silver keeps
 every class the registry knows. A consumer picks the classes it wants, so a new class
 costs a silver rebuild, not a download. A silver rebuild reads no network.
 
-There is no layer above silver yet. What a curated mix of these datasets should look
-like is still open, so nothing here decides it.
+Gold is the union of every silver dataset on disk. See [Gold](#gold) below.
 
 ### Why silver is Parquet
 
@@ -185,6 +185,38 @@ pipeline, not for silver.
 `SilverManifest.commercial_use` carries each dataset's answer, so a consumer that mixes
 them can enforce its own licence rule.
 
+### Gold
+
+Gold joins the silver datasets into one table set. A consumer reads gold and no silver.
+
+- A row carries `image_id` or `box_id`, the dataset, the split and a role.
+- A role is `train`, `val` or `test`. Each source maps its own split names onto the
+  roles in `DatasetSpec.split_roles`.
+- Gold holds no flagged box. A crowd box, a depiction and a region the annotators
+  rejected stay in silver.
+- `image_path` is relative to the lake root, so gold names a pixel on any machine.
+- `changed_at` is the build that last changed the row. A row that a rebuild leaves
+  equal keeps its time.
+- Gold copies no embedding. The vectors stay in the silver files.
+
+| Dataset | Split | Role |
+| --- | --- | --- |
+| open_images | train, validation, test | train, val, test |
+| wider_face | train, val | train, val |
+| pp4av | test, fisheye | test, test |
+
+A build writes a new directory under `gold/versions/`, and then replaces `_gold.json`,
+which names the current version. A reader takes the version from `_gold.json`, so it
+never sees a half written build. Gold keeps the current version and the one before it.
+
+```bash
+duckdb -c "select dataset, role, class_name, count(*)
+           from read_parquet('$CV_LAKEHOUSE_ROOT/gold/versions/1/boxes/*/*.parquet')
+           group by all"
+```
+
+A dataset with no silver on disk is left out, and the run logs its name.
+
 ## Storage
 
 Every path derives from one root. Set it with an environment variable:
@@ -202,6 +234,10 @@ $CV_LAKEHOUSE_ROOT/
     boxes/<split>.parquet            one row per box, XYWH pixels, exact floats
     embeddings/<split>.parquet       one MobileCLIP vector per image
     crop_embeddings/<split>.parquet  one MobileCLIP vector per box crop
+  gold/
+    _gold.json                       the current version, and its datasets
+    versions/<n>/images/<dataset>/<split>.parquet   one row per image
+    versions/<n>/boxes/<dataset>/<split>.parquet    one row per box
   .studio/<name>.db            a LightlyStudio cache, safe to delete
 ```
 
@@ -284,7 +320,7 @@ and the rest annotations.
 ## Running it
 
 ```bash
-make dev   # then materialize bronze and silver in the UI
+make dev   # then materialize bronze, silver and gold in the UI
 ```
 
 To link a dataset that you already have, set `source_dir` in the run config of its
@@ -322,6 +358,10 @@ src/cv_lakehouse/
   settings.py        pydantic-settings, prefix CV_LAKEHOUSE_
   normalization.py   normalise one dataset onto the canonical classes
   silver_schema.py   the Parquet schema silver writes, and the streaming writer
+  box_identity.py    the ids of an image and of a box
+  split_roles.py     the roles a split can have in gold
+  gold_schema.py     the Parquet schema gold writes
+  gold_build.py      build one gold version from the silver datasets on disk
   embeddings.py      the MobileCLIP client, and the embedding Parquet it writes
   manifests.py       what each layer writes beside its output
   sources/           one module per dataset, the source registry, and the

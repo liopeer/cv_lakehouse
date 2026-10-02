@@ -37,6 +37,7 @@ from cv_lakehouse.sources.base import (
     read_image_size,
 )
 from cv_lakehouse.sources.open_images_files import OPEN_IMAGES_FILES
+from cv_lakehouse.split_roles import SplitRole
 
 # Open Images labels a box with a Freebase id. These are the ids the class registry
 # names.
@@ -72,6 +73,11 @@ SPEC = DatasetSpec(
     license="CC-BY-4.0 annotations, CC-BY-2.0 images",
     commercial_use=True,
     splits=("train", "validation", "test"),
+    split_roles={
+        "train": SplitRole.TRAIN,
+        "validation": SplitRole.VAL,
+        "test": SplitRole.TEST,
+    },
     category_map=FREEBASE_MID_TO_CLASS_NAME,
     default_class="other",
     notes="Web photography. The only commercially usable source for both classes.",

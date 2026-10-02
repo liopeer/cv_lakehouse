@@ -34,18 +34,8 @@ from cv_lakehouse.silver_schema import (
 )
 from cv_lakehouse.sources.source_registry import SOURCE_BY_NAME
 from tests.fakes import FakeEmbedder
-from tests.fixtures import make_all, make_wider_face
-
-DATASETS = ("open_images", "wider_face", "pp4av")
-
-
-@pytest.fixture
-def lake(tmp_path: Path) -> LakeResource:
-    return LakeResource(
-        root=str(tmp_path / "lake"),
-        download_workers=2,
-        request_timeout_seconds=5.0,
-    )
+from tests.fixtures import make_wider_face
+from tests.lake_runs import DATASETS, materialize_assets, materialize_bronze_links
 
 
 @pytest.fixture
@@ -62,34 +52,10 @@ def embedding_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LakeResou
     )
 
 
-@pytest.fixture
-def bronze_sources(tmp_path: Path) -> dict[str, Path]:
-    return make_all(tmp_path / "external")
-
-
-def _materialize_bronze(lake: LakeResource, sources: dict[str, Path]) -> None:
-    for name in DATASETS:
-        asset = build_bronze_asset(name)
-        result = dg.materialize(
-            assets=[asset],
-            resources={"lake": lake},
-            run_config=dg.RunConfig(
-                ops={asset.op.name: {"config": {"source_dir": str(sources[name])}}}
-            ),
-        )
-        assert result.success
-
-
-def _materialize(lake: LakeResource, assets: list) -> dg.ExecuteInProcessResult:
-    result = dg.materialize(assets=assets, resources={"lake": lake})
-    assert result.success
-    return result
-
-
 def test_bronze_links_instead_of_downloading(
     lake: LakeResource, bronze_sources: dict[str, Path]
 ) -> None:
-    _materialize_bronze(lake=lake, sources=bronze_sources)
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
     for name in DATASETS:
         assert lake.paths.bronze_dir(name).is_symlink()
         assert lake.paths.bronze_dir(name).resolve() == bronze_sources[name].resolve()
@@ -129,7 +95,7 @@ def test_bronze_rejects_a_link_to_an_incomplete_copy(
 def test_the_bronze_manifest_lists_every_published_file(
     lake: LakeResource, bronze_sources: dict[str, Path]
 ) -> None:
-    _materialize_bronze(lake=lake, sources=bronze_sources)
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
     manifest = read_manifest(
         path=lake.paths.bronze_dir("pp4av") / BRONZE_MANIFEST, model=BronzeManifest
     )
@@ -139,8 +105,8 @@ def test_the_bronze_manifest_lists_every_published_file(
 def test_silver_normalizes_every_dataset(
     lake: LakeResource, bronze_sources: dict[str, Path]
 ) -> None:
-    _materialize_bronze(lake=lake, sources=bronze_sources)
-    _materialize(
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
+    materialize_assets(
         lake=lake, assets=[silver_defs.build_silver_asset(name) for name in DATASETS]
     )
 
@@ -178,8 +144,8 @@ def test_silver_writes_no_embedding_without_a_server(
     lake: LakeResource, bronze_sources: dict[str, Path]
 ) -> None:
     """A laptop with no Triton server still builds the layer."""
-    _materialize_bronze(lake=lake, sources=bronze_sources)
-    _materialize(lake=lake, assets=[silver_defs.build_silver_asset("wider_face")])
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
+    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("wider_face")])
 
     silver_dir = lake.paths.silver_dir("wider_face")
     manifest = read_manifest(path=silver_dir / SILVER_MANIFEST, model=SilverManifest)
@@ -195,8 +161,8 @@ def test_silver_writes_no_embedding_without_a_server(
 def test_silver_embeds_every_image_and_every_box(
     embedding_lake: LakeResource, bronze_sources: dict[str, Path]
 ) -> None:
-    _materialize_bronze(lake=embedding_lake, sources=bronze_sources)
-    _materialize(
+    materialize_bronze_links(lake=embedding_lake, sources=bronze_sources)
+    materialize_assets(
         lake=embedding_lake, assets=[silver_defs.build_silver_asset("wider_face")]
     )
 
@@ -261,14 +227,14 @@ def test_rematerializing_without_a_server_removes_the_embeddings(
 
     Both fixtures resolve to the same root, so the second run rebuilds the first.
     """
-    _materialize_bronze(lake=embedding_lake, sources=bronze_sources)
-    _materialize(
+    materialize_bronze_links(lake=embedding_lake, sources=bronze_sources)
+    materialize_assets(
         lake=embedding_lake, assets=[silver_defs.build_silver_asset("wider_face")]
     )
     silver_dir = embedding_lake.paths.silver_dir("wider_face")
     assert embeddings_file(silver_dir=silver_dir, split="train").exists()
 
-    _materialize(lake=lake, assets=[silver_defs.build_silver_asset("wider_face")])
+    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("wider_face")])
 
     assert not embeddings_file(silver_dir=silver_dir, split="train").exists()
     assert not crop_embeddings_file(silver_dir=silver_dir, split="train").exists()
@@ -279,7 +245,7 @@ def test_rematerializing_without_a_server_removes_the_embeddings(
 def test_silver_checks_pass(
     lake: LakeResource, bronze_sources: dict[str, Path]
 ) -> None:
-    _materialize_bronze(lake=lake, sources=bronze_sources)
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
     for name in DATASETS:
         result = dg.materialize(
             assets=[
@@ -298,8 +264,8 @@ def test_silver_writes_parquet_a_plain_reader_can_open(
     lake: LakeResource, bronze_sources: dict[str, Path]
 ) -> None:
     """The layer has to be usable without our code, which is the point of Parquet."""
-    _materialize_bronze(lake=lake, sources=bronze_sources)
-    _materialize(
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
+    materialize_assets(
         lake=lake, assets=[silver_defs.build_silver_asset(name) for name in DATASETS]
     )
 

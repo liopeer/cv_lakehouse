@@ -21,6 +21,7 @@ from cv_lakehouse.sources.published_files import (
     PublishedFile,
 )
 from cv_lakehouse.sources.yolo_txt import YoloTxtObjectDetectionInput
+from cv_lakehouse.split_roles import SplitRole
 
 # The Hugging Face repository is the official distribution, so bronze holds all of
 # it, at this commit.
@@ -104,6 +105,7 @@ SPEC = DatasetSpec(
     license="CC-BY-NC-ND-4.0",
     commercial_use=False,
     splits=("test", "fisheye"),
+    split_roles={"test": SplitRole.TEST, "fisheye": SplitRole.TEST},
     category_map={CLASS_NAMES[0]: "face", CLASS_NAMES[1]: "license_plate"},
     default_class="other",
     notes="Evaluation benchmark on road driving footage. Never use it for training.",

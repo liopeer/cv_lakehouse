@@ -16,6 +16,9 @@ from __future__ import annotations
 from hashlib import md5
 from uuid import UUID
 
+# `derive_image_id` over the three key columns of a silver file, for a DuckDB query.
+IMAGE_ID_SQL = "md5(dataset || '/' || split || '/' || file_name)::UUID::VARCHAR"
+
 
 def derive_image_id(*, dataset: str, split: str, file_name: str) -> str:
     return _render_md5_as_uuid(f"{dataset}/{split}/{file_name}")
