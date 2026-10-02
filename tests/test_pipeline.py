@@ -10,7 +10,6 @@ from pathlib import Path
 
 import dagster as dg
 import pyarrow.parquet as pq
-import pytest
 
 from cv_lakehouse.defs import silver as silver_defs
 from cv_lakehouse.defs.bronze import build_bronze_asset, detect_materialized_splits
@@ -33,23 +32,8 @@ from cv_lakehouse.silver_schema import (
     images_file,
 )
 from cv_lakehouse.sources.source_registry import SOURCE_BY_NAME
-from tests.fakes import FakeEmbedder
 from tests.fixtures import make_wider_face
 from tests.lake_runs import DATASETS, materialize_assets, materialize_bronze_links
-
-
-@pytest.fixture
-def embedding_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LakeResource:
-    """A lake with a Triton server that is a fake, so no test needs a GPU."""
-    monkeypatch.setattr(
-        target=silver_defs, name="TritonEmbedder", value=lambda url: FakeEmbedder()
-    )
-    return LakeResource(
-        root=str(tmp_path / "lake"),
-        download_workers=2,
-        request_timeout_seconds=5.0,
-        triton_url="fake:0",
-    )
 
 
 def test_bronze_links_instead_of_downloading(

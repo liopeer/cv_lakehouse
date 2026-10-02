@@ -8,12 +8,14 @@ license = "MIT"
 dependencies = [
     "dagster==1.13.21",
     "duckdb>=1.2.2,<1.6",
+    "fastapi>=0.141.1",
     "httpx>=0.28.1",
     "labelformat>=0.1.17",
     "pillow>=12.3.0",
     "pyarrow>=17.0.0",
     "pydantic-settings>=2.15.0",
     "tritonclient[grpc]>=2.72.0",
+    "uvicorn>=0.52.4",
 ]
 
 [dependency-groups]

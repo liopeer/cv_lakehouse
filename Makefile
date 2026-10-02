@@ -8,7 +8,7 @@
 UV_RUN := uv run --frozen
 
 .PHONY: help sync lock license-headers format format-check lint lint-fix typecheck test \
-	defs dev image studio check clean
+	defs dev api image studio check clean
 
 help:  ## List targets.
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -54,6 +54,9 @@ defs: sync  ## Validate the Dagster definitions.
 
 dev: sync  ## Start the Dagster UI on port 3000.
 	$(UV_RUN) dg dev
+
+api: sync  ## Serve gold over HTTP on port 8000.
+	$(UV_RUN) uvicorn --factory cv_lakehouse.gold_api.app:create_app_from_env --port 8000
 
 image:  ## Build the Dagster code location image, as the release does.
 	docker build -t cv_lakehouse:dev .
