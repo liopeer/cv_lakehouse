@@ -86,7 +86,10 @@ def test_silver_keeps_an_unnamed_class_as_other(tmp_path: Path) -> None:
     """Bronze holds a cat. Silver keeps the box and loses the label."""
     source = OpenImagesSource()
     normalizer = RawImageNormalizer(
-        category_map=source.spec.category_map, default_class=source.spec.default_class
+        dataset=source.spec.name,
+        split="validation",
+        category_map=source.spec.category_map,
+        default_class=source.spec.default_class,
     )
     images = list(
         normalizer.normalize_to_silver_images(

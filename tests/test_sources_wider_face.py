@@ -57,7 +57,10 @@ def test_read_rows_keeps_the_rejected_box_and_flags_it(tmp_path: Path) -> None:
 def test_normalization_drops_the_zero_area_box(tmp_path: Path) -> None:
     source = WiderFaceSource()
     normalizer = RawImageNormalizer(
-        category_map=source.spec.category_map, default_class=source.spec.default_class
+        dataset=source.spec.name,
+        split="train",
+        category_map=source.spec.category_map,
+        default_class=source.spec.default_class,
     )
     bronze = _fixture(tmp_path)
     counts = [

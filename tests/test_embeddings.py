@@ -123,6 +123,7 @@ def _write_silver(tmp_path):
                 height=100,
                 boxes=(
                     SilverBox(
+                        box_id="box-0",
                         box_index=0,
                         class_id=0,
                         class_name="face",
@@ -133,6 +134,7 @@ def _write_silver(tmp_path):
                         h=20.0,
                     ),
                     SilverBox(
+                        box_id="box-1",
                         box_index=1,
                         class_id=1,
                         class_name="license_plate",
@@ -174,6 +176,7 @@ def test_writing_embeddings_matches_the_schema_and_the_row_order(tmp_path) -> No
     assert image_table.schema == EMBEDDING_SCHEMA
     assert crop_table.schema == CROP_EMBEDDING_SCHEMA
     assert image_table.column("file_name").to_pylist() == ["a.jpg", "b.jpg"]
+    assert crop_table.column("box_id").to_pylist() == ["box-0", "box-1"]
     assert crop_table.column("box_index").to_pylist() == [0, 1]
     assert len(image_table.column("embedding")[0]) == EMBEDDING_DIMENSION
 

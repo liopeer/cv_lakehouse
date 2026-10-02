@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
+import duckdb
 from labelformat.model.category import Category
 
+from cv_lakehouse.box_identity import derive_box_id, derive_image_id
 from cv_lakehouse.class_registry import CanonicalClass
 from cv_lakehouse.normalization import RawImageNormalizer
 from cv_lakehouse.silver_schema import SilverImage
@@ -50,8 +52,20 @@ def _raw(**attrs: int | bool | None) -> list[RawImage]:
     ]
 
 
+def _build_normalizer() -> RawImageNormalizer:
+    return RawImageNormalizer(
+        dataset="d", split="train", category_map=CATEGORY_MAP, default_class="other"
+    )
+
+
+def _derive_a_box_id(source_box_index: int) -> str:
+    return derive_box_id(
+        dataset="d", split="train", file_name="a.jpg", source_box_index=source_box_index
+    )
+
+
 def _normalized() -> tuple[RawImageNormalizer, list[SilverImage]]:
-    normalizer = RawImageNormalizer(category_map=CATEGORY_MAP, default_class="other")
+    normalizer = _build_normalizer()
     return normalizer, list(normalizer.normalize_to_silver_images(_raw()))
 
 
@@ -83,9 +97,48 @@ def test_normalize_numbers_the_boxes_it_keeps() -> None:
 
 
 def test_normalize_carries_the_attributes_through() -> None:
-    normalizer = RawImageNormalizer(category_map=CATEGORY_MAP, default_class="other")
+    normalizer = _build_normalizer()
     images = list(
         normalizer.normalize_to_silver_images(_raw(attr_blur=2, attr_invalid=False))
     )
     assert images[0].boxes[0].attrs == {"attr_blur": 2, "attr_invalid": False}
     assert images[0].boxes[1].attrs == {}
+
+
+def test_normalize_keys_a_box_by_its_position_in_the_source() -> None:
+    """A dropped box shifts `box_index` but no id."""
+    raw = RawImage(
+        file_name="a.jpg",
+        width=100,
+        height=80,
+        boxes=(
+            RawBox(source_class=SRC_FACE.name, xmin=20, ymin=20, xmax=20, ymax=45),
+            RawBox(source_class=SRC_FACE.name, xmin=10, ymin=10, xmax=30, ymax=40),
+        ),
+    )
+    (image,) = _build_normalizer().normalize_to_silver_images([raw])
+    (box,) = image.boxes
+    assert box.box_index == 0
+    assert box.box_id == _derive_a_box_id(1)
+
+
+def test_normalize_gives_every_kept_box_its_source_id() -> None:
+    _, images = _normalized()
+    assert [box.box_id for box in images[0].boxes] == [
+        _derive_a_box_id(index) for index in (0, 1, 2)
+    ]
+
+
+def test_derived_ids_match_the_duckdb_expression() -> None:
+    """LightlyStudio and gold derive the same ids in SQL."""
+    with duckdb.connect() as connection:
+        row = connection.execute(
+            query=(
+                "select md5('d/train/a.jpg')::UUID::VARCHAR, "
+                "md5('d/train/a.jpg#3')::UUID::VARCHAR"
+            )
+        ).fetchone()
+    assert row == (
+        derive_image_id(dataset="d", split="train", file_name="a.jpg"),
+        _derive_a_box_id(3),
+    )

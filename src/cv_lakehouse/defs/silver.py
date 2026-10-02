@@ -52,7 +52,7 @@ EDGE_TOLERANCE_PIXELS = 1e-6
 
 
 # Bump this when the normalisation rules change, such as clipping or the drop policy.
-SILVER_LOGIC_VERSION = "4"
+SILVER_LOGIC_VERSION = "5"
 
 
 def build_silver_asset(name: str) -> dg.AssetsDefinition:
@@ -105,7 +105,10 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
         dropped_box_reasons = Counter[str]()
         for split in bronze.splits:
             normalizer = RawImageNormalizer(
-                category_map=spec.category_map, default_class=spec.default_class
+                dataset=name,
+                split=split,
+                category_map=spec.category_map,
+                default_class=spec.default_class,
             )
             written_images, written_boxes = write_split(
                 silver_dir=silver_dir,
@@ -218,7 +221,10 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
     @dg.asset_check(
         asset=key,
         name="boxes_are_valid",
-        description="Every box is inside its image, has an area, and a known class.",
+        description=(
+            "Every box has a unique id, is inside its image, has an area, and a "
+            "known class."
+        ),
         blocking=True,
     )
     def _boxes_are_valid(lake: LakeResource) -> dg.AssetCheckResult:
@@ -304,6 +310,7 @@ _BOX_PROBLEM_QUERY = """
 with joined as (
     select
         b.file_name,
+        count(*) over (partition by b.box_id) as box_id_count,
         b.class_id,
         b.x,
         b.y,
@@ -319,6 +326,7 @@ judged as (
         file_name,
         case
             when width is null then 'no image row'
+            when box_id_count > 1 then 'repeated box id'
             when not list_contains($ids, class_id) then 'unknown class ' || class_id
             when w <= 0 or h <= 0 then 'zero area box'
             when x < -$tolerance or y < -$tolerance
