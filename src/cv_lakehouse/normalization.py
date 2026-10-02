@@ -15,6 +15,7 @@ from collections.abc import Iterable, Iterator, Mapping
 
 from labelformat.model.bounding_box import BoundingBox
 
+from cv_lakehouse.box_identity import derive_box_id
 from cv_lakehouse.class_registry import CanonicalClass
 from cv_lakehouse.silver_schema import SilverBox, SilverImage
 from cv_lakehouse.sources.base import RawImage
@@ -38,7 +39,16 @@ class RawImageNormalizer:
     after the write.
     """
 
-    def __init__(self, category_map: Mapping[str, str], default_class: str) -> None:
+    def __init__(
+        self,
+        *,
+        dataset: str,
+        split: str,
+        category_map: Mapping[str, str],
+        default_class: str,
+    ) -> None:
+        self._dataset = dataset
+        self._split = split
         self._category_map = {
             name.lower(): CanonicalClass.from_class_name(target)
             for name, target in category_map.items()
@@ -60,7 +70,7 @@ class RawImageNormalizer:
 
     def _iter_silver_boxes(self, image: RawImage) -> Iterator[SilverBox]:
         box_index = 0
-        for raw in image.boxes:
+        for source_box_index, raw in enumerate(image.boxes):
             canonical_class = self._category_map.get(
                 raw.source_class.lower(), self._default_class
             )
@@ -75,6 +85,12 @@ class RawImageNormalizer:
                 self.dropped_box_reasons["degenerate_box"] += 1
                 continue
             yield SilverBox(
+                box_id=derive_box_id(
+                    dataset=self._dataset,
+                    split=self._split,
+                    file_name=image.file_name,
+                    source_box_index=source_box_index,
+                ),
                 box_index=box_index,
                 class_id=canonical_class.value,
                 class_name=canonical_class.class_name,

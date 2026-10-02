@@ -92,15 +92,16 @@ logger = logging.getLogger(__name__)
 # an enum but not a bind parameter, so this belongs in the statement.
 OBJECT_DETECTION = "'OBJECT_DETECTION'"
 
-# The semantic key of an image, and of one box on it. An md5 is 32 hex characters, which
-# DuckDB casts straight into the UUID column LightlyStudio uses for a primary key. Both
-# Parquet files carry these three columns, so the image key is the same expression on
-# either side of the join.
+# The ids of `cv_lakehouse.box_identity`. An md5 is 32 hex characters, which DuckDB
+# casts straight into the UUID column LightlyStudio uses for a primary key. Both Parquet
+# files carry the image key columns, so the image id is the same expression on either
+# side of the join. Silver stores the box id, because it counts the boxes the source
+# published and not the boxes that survived.
 #
 # A `::` cast is safe here but never on a bind parameter: SQLAlchemy's bind regex
 # mis-parses `:name::TYPE`, so a parameter is cast with `cast(:name as TYPE)` instead.
 IMAGE_ID = "md5(dataset || '/' || split || '/' || file_name)::UUID"
-BOX_ID = "md5(dataset || '/' || split || '/' || file_name || '#' || box_index)::UUID"
+BOX_ID = "box_id::UUID"
 
 
 def build_studio_database(

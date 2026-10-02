@@ -65,6 +65,7 @@ BOX_SCHEMA = pa.schema(
         pa.field(name="dataset", type=pa.string(), nullable=False),
         pa.field(name="split", type=pa.string(), nullable=False),
         pa.field(name="file_name", type=pa.string(), nullable=False),
+        pa.field(name="box_id", type=pa.string(), nullable=False),
         pa.field(name="box_index", type=pa.int32(), nullable=False),
         pa.field(name="class_id", type=pa.int32(), nullable=False),
         pa.field(name="class_name", type=pa.string(), nullable=False),
@@ -100,6 +101,7 @@ CROP_EMBEDDING_SCHEMA = pa.schema(
         pa.field(name="dataset", type=pa.string(), nullable=False),
         pa.field(name="split", type=pa.string(), nullable=False),
         pa.field(name="file_name", type=pa.string(), nullable=False),
+        pa.field(name="box_id", type=pa.string(), nullable=False),
         pa.field(name="box_index", type=pa.int32(), nullable=False),
         _EMBEDDING_FIELD,
     ]
@@ -127,8 +129,13 @@ def crop_embeddings_file(silver_dir: Path, split: str) -> Path:
 
 @dataclass(frozen=True)
 class SilverBox:
-    """One box on a canonical class, in pixel XYWH, clipped to its image."""
+    """One box on a canonical class, in pixel XYWH, clipped to its image.
 
+    `box_id` names the box across layers and tools. `box_index` only numbers the boxes
+    of one image, and shifts when a box drops.
+    """
+
+    box_id: str
     box_index: int
     class_id: int
     class_name: str
@@ -209,6 +216,7 @@ def write_split(
                 box_writer.add(
                     {
                         **key,
+                        "box_id": box.box_id,
                         "box_index": box.box_index,
                         "class_id": box.class_id,
                         "class_name": box.class_name,

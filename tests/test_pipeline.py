@@ -216,6 +216,10 @@ def test_silver_embeds_every_image_and_every_box(
     assert crops.num_rows == num_rows(boxes_file(silver_dir=silver_dir, split="train"))
     # The key of the boxes file, so a join needs nothing else.
     assert crops.column("file_name").to_pylist() == boxes_of(silver_dir)
+    assert (
+        crops.column("box_id")
+        == pq.read_table(boxes_file(silver_dir=silver_dir, split="train"))["box_id"]
+    )
 
 
 def boxes_of(silver_dir: Path) -> list[str]:

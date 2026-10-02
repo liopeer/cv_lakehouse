@@ -64,7 +64,10 @@ def test_normalizes_onto_the_canonical_classes(tmp_path: Path) -> None:
     source = PP4AVSource()
     bronze = _fixture(tmp_path)
     normalizer = RawImageNormalizer(
-        category_map=source.spec.category_map, default_class=source.spec.default_class
+        dataset=source.spec.name,
+        split="test",
+        category_map=source.spec.category_map,
+        default_class=source.spec.default_class,
     )
     images = list(
         normalizer.normalize_to_silver_images(

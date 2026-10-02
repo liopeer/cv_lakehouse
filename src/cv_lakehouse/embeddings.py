@@ -235,7 +235,7 @@ def write_image_embeddings(
             names: list[str] = batch.column("file_name").to_pylist()
             writer.add(
                 file_names=names,
-                box_indices=None,
+                box_keys=None,
                 vectors=embedder.embed_images([f"{root}/{name}" for name in names]),
             )
     finally:
@@ -256,7 +256,7 @@ def write_crop_embeddings(
     Flagged boxes are embedded too. Silver keeps them, and its consumer decides.
     """
     root = image_root.rstrip("/")
-    columns = ["file_name", "box_index", "x", "y", "w", "h"]
+    columns = ["file_name", "box_id", "box_index", "x", "y", "w", "h"]
     writer = _EmbeddingWriter(
         path=crop_embeddings_file(silver_dir=silver_dir, split=split),
         schema=CROP_EMBEDDING_SCHEMA,
@@ -281,12 +281,20 @@ def write_crop_embeddings(
             ]
             writer.add(
                 file_names=rows["file_name"],
-                box_indices=rows["box_index"],
+                box_keys=BoxKeys(ids=rows["box_id"], indices=rows["box_index"]),
                 vectors=embedder.embed_crops(crops),
             )
     finally:
         writer.close()
     return writer.count
+
+
+@dataclass(frozen=True)
+class BoxKeys:
+    """The two box columns of a crop embedding row, one entry per vector."""
+
+    ids: list[str]
+    indices: list[int]
 
 
 class _EmbeddingWriter:
@@ -308,7 +316,7 @@ class _EmbeddingWriter:
         self,
         *,
         file_names: list[str],
-        box_indices: list[int] | None,
+        box_keys: BoxKeys | None,
         vectors: NDArray[np.float32],
     ) -> None:
         count = len(file_names)
@@ -319,8 +327,9 @@ class _EmbeddingWriter:
             pa.array(obj=[self._split] * count, type=pa.string()),
             pa.array(obj=file_names, type=pa.string()),
         ]
-        if box_indices is not None:
-            columns.append(pa.array(obj=box_indices, type=pa.int32()))
+        if box_keys is not None:
+            columns.append(pa.array(obj=box_keys.ids, type=pa.string()))
+            columns.append(pa.array(obj=box_keys.indices, type=pa.int32()))
         columns.append(_wrap_vectors_as_list_array(vectors))
         self._writer.write_batch(
             pa.RecordBatch.from_arrays(arrays=columns, schema=self._schema)

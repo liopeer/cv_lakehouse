@@ -86,6 +86,11 @@ attribute:
 | open_images | `attr_is_group_of`, `attr_is_depiction` |
 | pp4av | none |
 
+A box is keyed by `box_id`, an md5 of the dataset, the split, the file name and the box's
+position in the source, written as a UUID. A box that normalisation drops leaves every
+other id as it was, so `box_id` names a box across layers and in LightlyStudio.
+`box_index` only numbers the boxes that one image kept.
+
 LightlyStudio cannot display these yet: its `CreateObjectDetection` carries a class name,
 a confidence and a box, and its public `Annotation` exposes no metadata. They are there
 for a query and for training.
@@ -117,7 +122,7 @@ files, so a join needs nothing else:
 duckdb -c "select b.class_name, count(*)
            from read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/boxes/*.parquet') b
            join read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/crop_embeddings/*.parquet') e
-             using (dataset, split, file_name, box_index)
+             using (box_id)
            where list_dot_product(e.embedding, (
                  select embedding
                  from read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/crop_embeddings/*.parquet')
