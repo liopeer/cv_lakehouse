@@ -1,0 +1,245 @@
+#
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025–2026 Lionel Peer
+#
+"""A silver rebuild embeds only what the run before left without a vector."""
+
+from collections.abc import Sequence
+from pathlib import Path
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from numpy.typing import NDArray
+
+from cv_lakehouse.box_identity import derive_box_id
+from cv_lakehouse.defs import corrections as corrections_defs
+from cv_lakehouse.defs import silver as silver_defs
+from cv_lakehouse.defs.corrections import build_corrections_asset
+from cv_lakehouse.defs.resources import LakeResource
+from cv_lakehouse.embeddings import EMBEDDING_DIMENSION, Crop, Embedder
+from cv_lakehouse.silver_schema import (
+    CROP_EMBEDDING_SCHEMA,
+    EMBEDDING_SCHEMA,
+    boxes_file,
+    crop_embeddings_file,
+    embeddings_file,
+)
+from cv_lakehouse.sources.correction_snapshots import CorrectionAction
+from tests.export_fakes import EXPORT_URL, FakeExportServer
+from tests.lake_runs import materialize_assets, materialize_bronze_links
+
+DATASET = "wider_face"
+PARADE = "0--Parade/a.jpg"
+HANDSHAKING = "1--Handshaking/b.jpg"
+FACE = derive_box_id(
+    dataset=DATASET, split="train", file_name=PARADE, source_box_index=0
+)
+DRAWN = "aaaaaaaa-0000-0000-0000-000000000001"
+
+
+class ContentEmbedder(Embedder):
+    """Give each input a vector of its own, and remember every request."""
+
+    def __init__(self) -> None:
+        self.paths: list[str] = []
+        self.crops: list[Crop] = []
+
+    def embed_images(self, paths: Sequence[str]) -> NDArray[np.float32]:
+        self.paths.extend(paths)
+        return _vectors_of([hash(path) for path in paths])
+
+    def embed_crops(self, crops: Sequence[Crop]) -> NDArray[np.float32]:
+        self.crops.extend(crops)
+        return _vectors_of([hash(crop) for crop in crops])
+
+    def forget_requests(self) -> None:
+        self.paths.clear()
+        self.crops.clear()
+
+
+def _vectors_of(seeds: list[int]) -> NDArray[np.float32]:
+    vectors = np.zeros(shape=(len(seeds), EMBEDDING_DIMENSION), dtype=np.float32)
+    for row, seed in enumerate(seeds):
+        vectors[row, seed % EMBEDDING_DIMENSION] = 1.0
+    return vectors
+
+
+class _Lake:
+    """A lake with linked bronze, a fake export, and one embedder for every run."""
+
+    def __init__(self, resource: LakeResource, server: FakeExportServer) -> None:
+        self.resource = resource
+        self.server = server
+        self.embedder = ContentEmbedder()
+        self.silver_dir = resource.paths.silver_dir(DATASET)
+
+    def build_silver(self, rows: list[dict] | None = None) -> None:
+        """Publish the rows as a snapshot, if any, and rebuild silver."""
+        if rows is not None:
+            self.server.publish(dataset=DATASET, rows=rows)
+        self.embedder.forget_requests()
+        materialize_assets(
+            lake=self.resource,
+            assets=[
+                build_corrections_asset(DATASET),
+                silver_defs.build_silver_asset(DATASET),
+            ],
+        )
+
+    def read_crop_vectors(self) -> dict[str, list[float]]:
+        table = pq.read_table(
+            crop_embeddings_file(silver_dir=self.silver_dir, split="train")
+        )
+        assert table.schema == CROP_EMBEDDING_SCHEMA
+        return dict(
+            zip(
+                table.column("box_id").to_pylist(),
+                table.column("embedding").to_pylist(),
+                strict=True,
+            )
+        )
+
+    def read_image_vectors(self) -> pa.Table:
+        table = pq.read_table(
+            embeddings_file(silver_dir=self.silver_dir, split="train")
+        )
+        assert table.schema == EMBEDDING_SCHEMA
+        return table
+
+
+@pytest.fixture
+def reuse_lake(
+    lake: LakeResource, bronze_sources: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> _Lake:
+    server = FakeExportServer()
+    resource = LakeResource(
+        root=lake.root,
+        download_workers=lake.download_workers,
+        request_timeout_seconds=lake.request_timeout_seconds,
+        triton_url="fake:0",
+        studio_export_url=EXPORT_URL,
+    )
+    reuse_lake = _Lake(resource=resource, server=server)
+    monkeypatch.setattr(
+        target=corrections_defs,
+        name="open_export_client",
+        value=lambda timeout: server.client(),
+    )
+    monkeypatch.setattr(
+        target=silver_defs, name="TritonEmbedder", value=lambda url: reuse_lake.embedder
+    )
+    materialize_bronze_links(lake=resource, sources=bronze_sources)
+    reuse_lake.build_silver()
+    return reuse_lake
+
+
+def _correction(box_id: str, action: str, file_name: str = PARADE, **fields) -> dict:
+    return {
+        "dataset": DATASET,
+        "split": "train",
+        "file_name": file_name,
+        "box_id": box_id,
+        "action": action,
+        **fields,
+    }
+
+
+def test_the_first_run_embeds_everything(reuse_lake: _Lake) -> None:
+    # Three train images and one val image. Two train boxes and one val box.
+    assert len(reuse_lake.embedder.paths) == 4
+    assert len(reuse_lake.embedder.crops) == 3
+
+
+def test_a_rebuild_with_no_change_embeds_nothing(reuse_lake: _Lake) -> None:
+    images = reuse_lake.read_image_vectors()
+    crops = reuse_lake.read_crop_vectors()
+
+    reuse_lake.build_silver()
+
+    assert (reuse_lake.embedder.paths, reuse_lake.embedder.crops) == ([], [])
+    assert reuse_lake.read_image_vectors() == images
+    assert reuse_lake.read_crop_vectors() == crops
+
+
+def test_a_relabelled_box_keeps_its_vector(reuse_lake: _Lake) -> None:
+    crops = reuse_lake.read_crop_vectors()
+
+    reuse_lake.build_silver(
+        [_correction(box_id=FACE, action=CorrectionAction.UPDATE, label_name="head")]
+    )
+
+    assert reuse_lake.embedder.crops == []
+    assert reuse_lake.read_crop_vectors() == crops
+
+
+def test_a_moved_box_is_the_only_one_embedded_again(reuse_lake: _Lake) -> None:
+    crops = reuse_lake.read_crop_vectors()
+
+    reuse_lake.build_silver(
+        [
+            _correction(
+                box_id=FACE,
+                action=CorrectionAction.UPDATE,
+                x=12.0,
+                y=22.0,
+                w=33.0,
+                h=44.0,
+            )
+        ]
+    )
+
+    (crop,) = reuse_lake.embedder.crops
+    assert (crop.x, crop.y, crop.width, crop.height) == (12, 22, 33, 44)
+    assert reuse_lake.embedder.paths == []
+    after = reuse_lake.read_crop_vectors()
+    assert after[FACE] == _vectors_of([hash(crop)])[0].tolist()
+    assert {box: v for box, v in after.items() if box != FACE} == {
+        box: v for box, v in crops.items() if box != FACE
+    }
+
+
+def test_a_drawn_box_is_embedded_and_a_deleted_box_loses_its_row(
+    reuse_lake: _Lake,
+) -> None:
+    reuse_lake.build_silver(
+        [
+            _correction(box_id=FACE, action=CorrectionAction.DELETE),
+            _correction(
+                box_id=DRAWN,
+                action=CorrectionAction.ADD,
+                file_name=HANDSHAKING,
+                label_name="face",
+                x=1.0,
+                y=2.0,
+                w=3.0,
+                h=4.0,
+            ),
+        ]
+    )
+
+    (crop,) = reuse_lake.embedder.crops
+    assert crop.path.endswith(HANDSHAKING)
+    vectors = reuse_lake.read_crop_vectors()
+    assert DRAWN in vectors and FACE not in vectors
+    # The rows keep the order of the boxes file.
+    boxes = pq.read_table(boxes_file(silver_dir=reuse_lake.silver_dir, split="train"))
+    assert list(vectors) == boxes.column("box_id").to_pylist()
+
+
+def test_a_rebuild_on_new_code_embeds_everything_again(
+    reuse_lake: _Lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(target=silver_defs, name="SILVER_LOGIC_VERSION", value="next")
+
+    reuse_lake.build_silver()
+
+    assert len(reuse_lake.embedder.paths) == 4
+    assert len(reuse_lake.embedder.crops) == 3
+
+
+def test_a_rebuild_leaves_no_working_file_behind(reuse_lake: _Lake) -> None:
+    reuse_lake.build_silver()
+    names = {path.name for path in reuse_lake.silver_dir.rglob("*") if path.is_file()}
+    assert names == {"_silver.json", "train.parquet", "val.parquet"}

@@ -5,8 +5,8 @@
 """Silver assets: one dataset, normalised onto the class registry, written as Parquet.
 
 When `CV_LAKEHOUSE_TRITON_URL` names a server, the same run also embeds every image
-and every box crop with MobileCLIP. No embedding is cached, so a rematerialisation
-embeds the dataset again.
+and every box crop with MobileCLIP. A run on the same code keeps the vector of an
+image, and of a box that did not move, from the run before.
 """
 
 # Dagster resolves the resource annotations at runtime, so this module must not
@@ -33,8 +33,13 @@ from cv_lakehouse.defs.resources import LakeResource
 from cv_lakehouse.embeddings import (
     EMBEDDING_MODEL,
     Embedder,
+    PreviousSplit,
     TritonEmbedder,
     clear_embeddings,
+    discard_previous_split,
+    reuse_or_embed_crops,
+    reuse_or_embed_images,
+    stash_previous_split,
     write_crop_embeddings,
     write_image_embeddings,
 )
@@ -111,10 +116,25 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 "CV_LAKEHOUSE_TRITON_URL is unset, so this run writes no embedding."
             )
 
+        # A vector of the run before is still right when only the corrections changed
+        # since: the same code, on the same model, over the pixels that bronze pins.
+        previous_manifest_path = silver_dir / SILVER_MANIFEST
+        reuses_embeddings = (
+            embedder is not None
+            and previous_manifest_path.exists()
+            and _describes_this_code(
+                manifest=read_manifest(
+                    path=previous_manifest_path, model=SilverManifest
+                ),
+                code_version=code_version,
+            )
+        )
+
         # Counted by the writer as it streams, not read back off the Parquet. These
         # go to the run log and the Dagster metadata, and no further: a materialisation
         # reports what it did, and the manifest describes what the layer is.
         num_images = num_boxes = num_embeddings = num_crop_embeddings = 0
+        num_reused_embeddings = 0
         dropped_box_reasons = Counter[str]()
         for split in bronze.splits:
             normalizer = RawImageNormalizer(
@@ -122,6 +142,11 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 split=split,
                 category_map=spec.category_map,
                 default_class=spec.default_class,
+            )
+            previous = (
+                stash_previous_split(silver_dir=silver_dir, split=split)
+                if reuses_embeddings
+                else None
             )
             written_images, written_boxes = write_split(
                 silver_dir=silver_dir,
@@ -138,15 +163,18 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             )
             if embedder is None:
                 clear_embeddings(silver_dir=silver_dir, split=split)
-                written_vectors, written_crops = 0, 0
+                written_vectors, written_crops, reused = 0, 0, 0
             else:
-                written_vectors, written_crops = _embed_split(
+                written_vectors, written_crops, reused = _embed_split(
                     embedder=embedder,
                     silver_dir=silver_dir,
                     dataset=name,
                     split=split,
                     image_root=bronze.image_roots[split],
+                    previous=previous,
                 )
+            discard_previous_split(silver_dir=silver_dir, split=split)
+            num_reused_embeddings += reused
             num_images += written_images
             num_boxes += written_boxes
             num_embeddings += written_vectors
@@ -155,7 +183,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             context.log.info(
                 f"{split}: {written_images} images, {written_boxes} boxes, "
                 f"{sum(normalizer.dropped_box_reasons.values())} dropped, "
-                f"{written_vectors + written_crops} embeddings"
+                f"{written_vectors + written_crops} embeddings, {reused} of them reused"
             )
         # The overlay counts across the splits, so its tally joins once.
         dropped_box_reasons.update(overlay.dropped_box_reasons)
@@ -182,6 +210,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 num_boxes=num_boxes,
                 num_embeddings=num_embeddings,
                 num_crop_embeddings=num_crop_embeddings,
+                num_reused_embeddings=num_reused_embeddings,
                 dropped_box_reasons=dropped_box_reasons,
                 embedded=embedder is not None,
                 correction_snapshot_id=(
@@ -194,6 +223,13 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
     return _silver
 
 
+def _describes_this_code(manifest: SilverManifest, code_version: str) -> bool:
+    return (
+        manifest.code_version == code_version
+        and manifest.embedding_model == EMBEDDING_MODEL
+    )
+
+
 def _embed_split(
     *,
     embedder: Embedder,
@@ -201,23 +237,25 @@ def _embed_split(
     dataset: str,
     split: str,
     image_root: str,
-) -> tuple[int, int]:
-    """Embed one split's images and box crops. Return the image and the crop count."""
-    num_embeddings = write_image_embeddings(
-        embedder=embedder,
-        silver_dir=silver_dir,
-        dataset=dataset,
-        split=split,
-        image_root=image_root,
-    )
-    num_crop_embeddings = write_crop_embeddings(
-        embedder=embedder,
-        silver_dir=silver_dir,
-        dataset=dataset,
-        split=split,
-        image_root=image_root,
-    )
-    return num_embeddings, num_crop_embeddings
+    previous: PreviousSplit | None,
+) -> tuple[int, int, int]:
+    """Embed the images and the box crops of one split.
+
+    Return the image count, the crop count, and how many vectors of the two came from
+    the run before.
+    """
+    target = {
+        "embedder": embedder,
+        "silver_dir": silver_dir,
+        "dataset": dataset,
+        "split": split,
+        "image_root": image_root,
+    }
+    if previous is None:
+        return write_image_embeddings(**target), write_crop_embeddings(**target), 0
+    num_embeddings, reused_images = reuse_or_embed_images(**target, previous=previous)
+    num_crops, reused_crops = reuse_or_embed_crops(**target, previous=previous)
+    return num_embeddings, num_crops, reused_images + reused_crops
 
 
 def _build_run_metadata(
@@ -227,6 +265,7 @@ def _build_run_metadata(
     num_boxes: int,
     num_embeddings: int,
     num_crop_embeddings: int,
+    num_reused_embeddings: int,
     dropped_box_reasons: Mapping[str, int],
     embedded: bool,
     correction_snapshot_id: str,
@@ -238,6 +277,7 @@ def _build_run_metadata(
         "num_boxes": num_boxes,
         "num_embeddings": num_embeddings,
         "num_crop_embeddings": num_crop_embeddings,
+        "num_reused_embeddings": num_reused_embeddings,
         "embedding_model": EMBEDDING_MODEL if embedded else "none",
         "license": license_name,
         "dropped_reasons": dg.MetadataValue.json(dict(dropped_box_reasons)),

@@ -173,9 +173,14 @@ The server resolves the path itself, so the stack mounts `$CV_LAKEHOUSE_ROOT` re
 at the same path inside the container. If a bronze directory is a symlink to a path
 outside the root, add a mount for that path to the compose file of the stack.
 
-Nothing is cached. A silver rematerialisation embeds the dataset again, which is the
-price of leaving the versioning out. The model name is part of the silver `code_version`,
-so a new model marks every silver asset stale.
+A silver rebuild on the same code embeds only what has no vector yet. An image keeps
+its vector, because bronze pins the pixels. A box keeps its vector when its four
+coordinates are equal to the run before, so a relabelled box is not embedded again, and
+a moved or a drawn box is. The run metadata counts the vectors it reused.
+
+A rebuild on other code embeds the dataset again. The model name is part of the silver
+`code_version`, so a new model marks every silver asset stale, and then no vector is
+reused. A new model behind the same name is not detected: bump `SILVER_LOGIC_VERSION`.
 
 ### The class registry
 
