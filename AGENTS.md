@@ -46,6 +46,9 @@ Use the Makefile. Do not call `uv run`, `ruff`, `pyrefly` or `pytest` directly.
 
 Run `make check` before you finish a task.
 
+`studio/` has its own environment. After a change under `studio/`, also run
+`make -C studio test`. It needs Docker, for a Postgres with pgvector.
+
 ## Commits
 
 Write every commit as a Conventional Commit. release-please reads the commits to pick
@@ -60,8 +63,9 @@ the next version and to write the changelog.
 
 ## Releases
 
-The app and `triton/` release independently. A commit under `triton/` goes into the next
-`triton` release. Any other commit goes into the next app release.
+The app, `triton/` and `studio/` release independently. A commit under `triton/` goes
+into the next `triton` release, and a commit under `studio/` into the next `studio`
+release. Any other commit goes into the next app release.
 
 - release-please keeps one release PR open for each of them. Merging it tags the
   release and publishes the image.

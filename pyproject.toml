@@ -63,7 +63,7 @@ registry_modules = [
 ]
 
 [tool.ruff]
-src = ["src", "tests", "tools"]
+src = ["src", "tests", "tools", "studio/src", "studio"]
 # Vendored from liopeer/lightly-studio, and from Apple under it. Ours to run, not to
 # reformat.
 extend-exclude = ["triton"]
@@ -79,8 +79,8 @@ select = [
 ]
 
 [tool.pyrefly]
-project-includes = ["src", "tests", "tools"]
-search-path = ["src", "tools", "."]
+project-includes = ["src", "tests", "tools", "studio/src"]
+search-path = ["src", "tools", "studio/src", "."]
 python-version = "3.12"
 
 [tool.pytest.ini_options]

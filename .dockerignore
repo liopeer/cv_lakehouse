@@ -15,8 +15,9 @@ __pycache__/
 # The lake itself, when CV_LAKEHOUSE_ROOT is left at its default.
 data/
 
-# Not part of the code location. `triton/` builds its own image.
+# Not part of the code location. `triton/` and `studio/` build their own images.
 triton/
+studio/
 tests/
 tools/
 dev/

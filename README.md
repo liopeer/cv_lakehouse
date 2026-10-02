@@ -31,14 +31,15 @@ make help    # list every target
 
 ## Releases and images
 
-The app and the Triton server release independently. For each one, release-please keeps a
-release PR open. Merging that PR tags the release and pushes the image. Any other merge
+The app, the Triton server and the LightlyStudio images release independently. For each
+one, release-please keeps a release PR open. Merging that PR tags the release and pushes the image. Any other merge
 publishes nothing.
 
 | Component | Tag | Image |
 | --- | --- | --- |
 | app | `vX.Y.Z` | `ghcr.io/liopeer/cv_lakehouse` |
 | triton | `triton-vX.Y.Z` | `ghcr.io/liopeer/cv_lakehouse-triton` |
+| studio | `studio-vX.Y.Z` | `ghcr.io/liopeer/cv_lakehouse-studio` and `-studio-sync` |
 
 Each image is tagged `X.Y.Z`, `X.Y` and `X`. Pin `X.Y.Z`, because the other two move. The
 app image is a Dagster code location on port 4000. The same image serves the
@@ -282,6 +283,12 @@ Only bronze holds pixels. Silver holds annotations, so it costs almost no disk.
 
 `.studio` is not a layer. See below.
 
+## Curating gold in LightlyStudio
+
+[studio/](studio/README.md) holds a LightlyStudio server on Postgres, and a sync that
+loads gold into it through the gold API. Its start page lists every dataset. A curator's
+edit survives every later sync.
+
 ## Browsing silver in LightlyStudio
 
 ```bash
@@ -409,6 +416,7 @@ tests/
 tools/
   studio.py          load silver into LightlyStudio. A uv script, not in the package
 triton/              the MobileCLIP server, vendored
+studio/              the LightlyStudio images: the server, and the sync from gold
 ```
 
 Dagster discovers everything in `defs/` automatically. Every other module is plain
