@@ -15,6 +15,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 
+from cv_lakehouse.class_registry import CanonicalClass
 from cv_lakehouse.gold_api.arrow_responses import build_rows_response
 from cv_lakehouse.gold_api.gold_queries import GoldTable, read_gold_page
 from cv_lakehouse.gold_api.row_filters import BoxFilter, ImageFilter
@@ -56,6 +57,13 @@ def create_app(paths: LakePaths) -> FastAPI:
     @app.get("/v1/meta")
     def read_meta() -> GoldManifest:
         return read_current_manifest()
+
+    @app.get("/v1/classes")
+    def list_classes() -> list[dict[str, int | str]]:
+        return [
+            {"class_id": member.value, "class_name": member.class_name}
+            for member in CanonicalClass
+        ]
 
     @app.get("/v1/images")
     def list_images(

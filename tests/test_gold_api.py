@@ -11,6 +11,7 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
+from cv_lakehouse.class_registry import CanonicalClass
 from cv_lakehouse.defs import silver as silver_defs
 from cv_lakehouse.defs.resources import LakeResource
 from cv_lakehouse.embeddings import EMBEDDING_DIMENSION
@@ -62,6 +63,13 @@ def test_meta_is_the_gold_manifest(client: TestClient) -> None:
     meta = client.get("/v1/meta").json()
     assert meta["version"] == 1
     assert {dataset["dataset"] for dataset in meta["datasets"]} == set(DATASETS)
+
+
+def test_classes_are_the_class_registry(lake: LakeResource) -> None:
+    """A consumer that creates labels needs every class, also one with no box yet."""
+    classes = TestClient(create_app(lake.paths)).get("/v1/classes").json()
+    assert classes[0] == {"class_id": 0, "class_name": "face"}
+    assert len(classes) == len(CanonicalClass)
 
 
 def test_images_and_boxes_come_unfiltered(client: TestClient) -> None:

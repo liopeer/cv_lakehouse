@@ -231,6 +231,7 @@ curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face'
 | Endpoint | Rows |
 | --- | --- |
 | `/v1/meta` | the gold manifest: the version, the datasets, the splits and their roles |
+| `/v1/classes` | the class registry, also before gold exists |
 | `/v1/images` | one per image |
 | `/v1/boxes` | one per box |
 | `/v1/embeddings` | `image_id` and the MobileCLIP vector of the image |
