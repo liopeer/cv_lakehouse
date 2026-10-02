@@ -25,4 +25,5 @@ class StudioSettings(BaseSettings):
     # fsspec URL such as s3://bucket/lake. Gold names a pixel relative to it.
     image_base: str
     sync_interval_seconds: float = Field(default=3600.0, gt=0)
+    export_port: int = 8002
     request_timeout_seconds: float = Field(default=300.0, gt=0)

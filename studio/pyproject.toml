@@ -5,6 +5,7 @@ description = "LightlyStudio on Postgres, kept in step with the gold layer of cv
 requires-python = ">=3.12,<3.13"
 license = "MIT"
 dependencies = [
+    "fastapi>=0.115",
     "httpx>=0.28.1",
     # The image builds LightlyStudio from the tag in `versions.env`, with `patches/` on
     # top. Keep this pin on the same version, so the tests run against the same schema.
@@ -12,6 +13,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pyarrow>=17.0.0",
     "pydantic-settings>=2.15.0",
+    "uvicorn>=0.30",
 ]
 
 [dependency-groups]

@@ -87,10 +87,13 @@ RUN groupadd --gid 10001 studio \
  && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin studio
 WORKDIR /home/studio
 
-# The sync writes to Postgres and reads the gold API. It serves nothing yet.
+# The sync loads gold into Postgres, and serves the corrections of the curators.
 FROM runtime AS sync
 USER studio
-CMD ["python", "-m", "cv_lakehouse_studio.sync_loop"]
+EXPOSE 8002
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/healthz', timeout=2)"]
+CMD ["python", "-m", "cv_lakehouse_studio.sync_service"]
 
 FROM runtime AS gui
 ARG UI_DIR

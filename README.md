@@ -316,6 +316,14 @@ Only bronze holds pixels. Silver holds annotations, so it costs almost no disk.
 loads gold into it through the gold API. Its start page lists every dataset. A curator's
 edit survives every later sync.
 
+The loop, each step by hand:
+
+1. A curator relabels, moves, deletes or draws boxes in LightlyStudio.
+2. Materialize `bronze/<dataset>_corrections`. It fetches a snapshot of the corrections.
+3. Materialize `silver/<dataset>`, and then `gold/current`.
+4. The sync sees the new gold version on its next run. The corrected boxes stay as the
+   curator left them.
+
 ## Browsing silver in LightlyStudio
 
 ```bash

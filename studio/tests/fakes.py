@@ -44,7 +44,14 @@ def _make_default_boxes() -> list[dict]:
 
 
 def make_box(
-    *, box_id: str, class_name: str, x: float, y: float, w: float, h: float
+    *,
+    box_id: str,
+    class_name: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    origin: str = "source",
 ) -> dict:
     return {
         "box_id": box_id,
@@ -55,6 +62,7 @@ def make_box(
         "y": y,
         "w": w,
         "h": h,
+        "origin": origin,
     }
 
 
@@ -142,6 +150,7 @@ _BOX_SCHEMA = pa.schema(
         pa.field(name="y", type=pa.float64()),
         pa.field(name="w", type=pa.float64()),
         pa.field(name="h", type=pa.float64()),
+        pa.field(name="origin", type=pa.string()),
     ]
 )
 

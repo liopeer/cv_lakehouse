@@ -4,14 +4,15 @@
 #
 """Sync every gold dataset into LightlyStudio, then sleep, then again.
 
-Start it with `python -m cv_lakehouse_studio.sync_loop`. The LightlyStudio server owns
-the schema: it runs the migrations when it starts. This process only writes while the
-database is at the migration that its own LightlyStudio build expects.
+`sync_service` starts this loop beside the export. The LightlyStudio server owns the
+schema: it runs the migrations when it starts. This loop only writes while the database
+is at the migration that its own LightlyStudio build expects.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 import psycopg
@@ -75,9 +76,8 @@ def sync_every_dataset(*, client: GoldClient, image_base: str) -> list[SyncRepor
     return reports
 
 
-def run_sync_loop() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    settings = StudioSettings.model_validate({})
+def run_sync_loop(settings: StudioSettings, sync_lock: threading.Lock) -> None:
+    """Run forever. Hold `sync_lock` during a run, so the export waits for its end."""
     client = HttpGoldClient(
         base_url=settings.gold_api_url, timeout_seconds=settings.request_timeout_seconds
     )
@@ -85,17 +85,14 @@ def run_sync_loop() -> None:
     while True:
         try:
             reject_schema_mismatch(settings.database_url)
-            if not connected:
-                db_manager.connect(db_url=settings.database_url)
-                connected = True
-            sync_every_dataset(client=client, image_base=settings.image_base)
+            with sync_lock:
+                if not connected:
+                    db_manager.connect(db_url=settings.database_url)
+                    connected = True
+                sync_every_dataset(client=client, image_base=settings.image_base)
         except Exception:
             # A failed run changes nothing, and the next run starts from gold again.
             logger.exception("The sync failed. The next run tries again.")
             if connected:
                 db_manager.persistent_session().rollback()
         time.sleep(settings.sync_interval_seconds)
-
-
-if __name__ == "__main__":
-    run_sync_loop()
