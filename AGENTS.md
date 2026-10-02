@@ -41,6 +41,7 @@ Use the Makefile. Do not call `uv run`, `ruff`, `pyrefly` or `pytest` directly.
 | `make defs` | Validate the Dagster definitions. |
 | `make check` | Run every check. |
 | `make dev` | Start the Dagster UI on port 3000. |
+| `make api` | Serve gold over HTTP on port 8000. |
 | `make image` | Build the Dagster code location image. |
 
 Run `make check` before you finish a task.

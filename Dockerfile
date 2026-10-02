@@ -52,6 +52,8 @@ WORKDIR /cv_lakehouse
 # The runs write bronze and silver, so uid 10001 needs write access to the lake mount.
 USER 10001
 
-EXPOSE 4000
+# 4000 is the Dagster code server. 8000 is the gold API, which the same image serves
+# with `uvicorn --factory cv_lakehouse.gold_api.app:create_app_from_env --host 0.0.0.0`.
+EXPOSE 4000 8000
 
 CMD ["dagster", "code-server", "start", "-h", "0.0.0.0", "-p", "4000", "-m", "cv_lakehouse.definitions", "--location-name", "cv_lakehouse"]

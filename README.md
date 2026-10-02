@@ -25,6 +25,7 @@ make sync
 ```bash
 make dev     # start the Dagster UI on http://localhost:3000
 make check   # format, lint, typecheck, test, validate definitions
+make api     # serve gold on http://localhost:8000
 make help    # list every target
 ```
 
@@ -40,7 +41,8 @@ publishes nothing.
 | triton | `triton-vX.Y.Z` | `ghcr.io/liopeer/cv_lakehouse-triton` |
 
 Each image is tagged `X.Y.Z`, `X.Y` and `X`. Pin `X.Y.Z`, because the other two move. The
-app image is a Dagster code location on port 4000.
+app image is a Dagster code location on port 4000. The same image serves the
+[gold API](#the-gold-api) on port 8000 when it starts with the uvicorn command.
 
 No image holds model weights. The Triton image downloads the checkpoint and builds its
 engines on the first start. See [triton/README.md](triton/README.md).
@@ -217,6 +219,40 @@ duckdb -c "select dataset, role, class_name, count(*)
 
 A dataset with no silver on disk is left out, and the run logs its name.
 
+### The gold API
+
+A read only HTTP API serves gold, so a consumer needs no access to the lake files.
+
+```bash
+make api
+curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face'
+```
+
+| Endpoint | Rows |
+| --- | --- |
+| `/v1/meta` | the gold manifest: the version, the datasets, the splits and their roles |
+| `/v1/images` | one per image |
+| `/v1/boxes` | one per box |
+| `/v1/embeddings` | `image_id` and the MobileCLIP vector of the image |
+| `/v1/crop_embeddings` | `box_id` and the MobileCLIP vector of the box crop |
+
+| Parameter | Selects |
+| --- | --- |
+| `dataset`, `split`, `role` | rows of these datasets, splits or roles |
+| `class_name` | boxes of these classes. Not on `/v1/images` and `/v1/embeddings` |
+| `commercial_use` | rows of the datasets with this licence answer |
+| `changed_since` | rows that a gold build changed after this time |
+| `limit`, `after` | one page. `limit` is 1000 by default and at most 100000 |
+
+A parameter that is given more than once matches any of its values. The rows come in
+the order of their id. A full page carries `next_after`, and the next request sends it
+as `after`.
+
+The answer is JSON. With `Accept: application/vnd.apache.arrow.stream` it is an Arrow
+IPC stream in the gold schema, and the cursor is in the `X-Next-After` header.
+
+The API authenticates nothing. Keep it on a private network.
+
 ## Storage
 
 Every path derives from one root. Set it with an environment variable:
@@ -362,6 +398,7 @@ src/cv_lakehouse/
   split_roles.py     the roles a split can have in gold
   gold_schema.py     the Parquet schema gold writes
   gold_build.py      build one gold version from the silver datasets on disk
+  gold_api/          the HTTP API over gold
   embeddings.py      the MobileCLIP client, and the embedding Parquet it writes
   manifests.py       what each layer writes beside its output
   sources/           one module per dataset, the source registry, and the

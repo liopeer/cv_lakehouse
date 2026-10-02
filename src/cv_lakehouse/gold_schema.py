@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from cv_lakehouse.silver_schema import ATTRIBUTE_COLUMNS
+from cv_lakehouse.silver_schema import ATTRIBUTE_COLUMNS, EMBEDDING_COLUMN
 
 # A box with one of these set is not in gold, so gold has no column for them.
 FLAG_COLUMNS = ("attr_is_group_of", "attr_is_depiction", "attr_invalid")
@@ -65,6 +65,18 @@ GOLD_BOX_SCHEMA = pa.schema(
         pa.field(name="commercial_use", type=pa.bool_(), nullable=False),
         _CHANGED_AT_FIELD,
     ]
+)
+
+# What the gold API serves for a vector. Gold stores none: the rows come from the
+# silver embedding files, on the id of the gold row they belong to.
+_EMBEDDING_FIELD = pa.field(
+    name=EMBEDDING_COLUMN, type=pa.list_(pa.float32()), nullable=False
+)
+GOLD_EMBEDDING_SCHEMA = pa.schema(
+    [pa.field(name="image_id", type=pa.string(), nullable=False), _EMBEDDING_FIELD]
+)
+GOLD_CROP_EMBEDDING_SCHEMA = pa.schema(
+    [pa.field(name="box_id", type=pa.string(), nullable=False), _EMBEDDING_FIELD]
 )
 
 
