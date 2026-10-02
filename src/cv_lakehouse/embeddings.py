@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Self
 
+import duckdb
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -198,6 +199,47 @@ def _concatenate_embeddings(
     return np.concatenate(arrays, axis=0)
 
 
+@dataclass(frozen=True)
+class PreviousSplit:
+    """The files of one split as the run before wrote them, set aside for reuse."""
+
+    boxes: Path
+    embeddings: Path
+    crop_embeddings: Path
+
+
+def _previous_file(path: Path) -> Path:
+    # Not `.parquet`, so a `*.parquet` scan over silver never reads it.
+    return path.with_name(path.name + ".previous")
+
+
+def stash_previous_split(silver_dir: Path, split: str) -> PreviousSplit | None:
+    """Set the boxes and the vectors of a split aside, before the run rewrites them.
+
+    Return None when one of the three is missing. The run then embeds everything.
+    """
+    discard_previous_split(silver_dir=silver_dir, split=split)
+    paths = (
+        boxes_file(silver_dir=silver_dir, split=split),
+        embeddings_file(silver_dir=silver_dir, split=split),
+        crop_embeddings_file(silver_dir=silver_dir, split=split),
+    )
+    if not all(path.exists() for path in paths):
+        return None
+    for path in paths:
+        path.rename(_previous_file(path))
+    return PreviousSplit(*(_previous_file(path) for path in paths))
+
+
+def discard_previous_split(silver_dir: Path, split: str) -> None:
+    for path in (
+        boxes_file(silver_dir=silver_dir, split=split),
+        embeddings_file(silver_dir=silver_dir, split=split),
+        crop_embeddings_file(silver_dir=silver_dir, split=split),
+    ):
+        _previous_file(path).unlink(missing_ok=True)
+
+
 def clear_embeddings(silver_dir: Path, split: str) -> None:
     """Remove one split's embedding files.
 
@@ -268,21 +310,10 @@ def write_crop_embeddings(
             path=boxes_file(silver_dir=silver_dir, split=split), columns=columns
         ):
             rows = batch.to_pydict()
-            crops = [
-                Crop.rounded_to_pixels(path=f"{root}/{name}", x=x, y=y, w=w, h=h)
-                for name, x, y, w, h in zip(
-                    rows["file_name"],
-                    rows["x"],
-                    rows["y"],
-                    rows["w"],
-                    rows["h"],
-                    strict=True,
-                )
-            ]
             writer.add(
                 file_names=rows["file_name"],
                 box_keys=BoxKeys(ids=rows["box_id"], indices=rows["box_index"]),
-                vectors=embedder.embed_crops(crops),
+                vectors=embedder.embed_crops(_build_crops(root=root, rows=rows)),
             )
     finally:
         writer.close()
@@ -295,6 +326,176 @@ class BoxKeys:
 
     ids: list[str]
     indices: list[int]
+
+
+def reuse_or_embed_images(
+    *,
+    embedder: Embedder,
+    silver_dir: Path,
+    dataset: str,
+    split: str,
+    image_root: str,
+    previous: PreviousSplit,
+) -> tuple[int, int]:
+    """Write the image vectors, and embed only an image that had none.
+
+    Bronze pins the pixels, so a vector of the run before is still the vector of its
+    image. Return the row count, and how many of the rows were reused.
+    """
+    root = image_root.rstrip("/")
+    target = embeddings_file(silver_dir=silver_dir, split=split)
+    fresh = target.with_name(target.name + ".fresh")
+    parameters = {
+        "rows": str(images_file(silver_dir=silver_dir, split=split)),
+        "previous": str(previous.embeddings),
+    }
+    with duckdb.connect() as connection:
+        writer = _EmbeddingWriter(
+            path=fresh, schema=EMBEDDING_SCHEMA, dataset=dataset, split=split
+        )
+        try:
+            for batch in connection.execute(
+                query=_IMAGES_WITH_NO_VECTOR, parameters=parameters
+            ).to_arrow_reader(ITEMS_PER_REQUEST):
+                names: list[str] = batch.column("file_name").to_pylist()
+                writer.add(
+                    file_names=names,
+                    box_keys=None,
+                    vectors=embedder.embed_images([f"{root}/{name}" for name in names]),
+                )
+        finally:
+            writer.close()
+        total = _write_query_rows(
+            connection=connection,
+            query=_IMAGE_VECTORS,
+            parameters={**parameters, "fresh": str(fresh)},
+            path=target,
+            schema=EMBEDDING_SCHEMA,
+        )
+    fresh.unlink()
+    return total, total - writer.count
+
+
+def reuse_or_embed_crops(
+    *,
+    embedder: Embedder,
+    silver_dir: Path,
+    dataset: str,
+    split: str,
+    image_root: str,
+    previous: PreviousSplit,
+) -> tuple[int, int]:
+    """Write the crop vectors, and embed only a box that is new or that moved.
+
+    A box keeps its vector when its four coordinates are equal to the run before. A
+    relabelled box is such a box. Return the row count, and how many were reused.
+    """
+    root = image_root.rstrip("/")
+    target = crop_embeddings_file(silver_dir=silver_dir, split=split)
+    fresh = target.with_name(target.name + ".fresh")
+    parameters = {
+        "rows": str(boxes_file(silver_dir=silver_dir, split=split)),
+        "previous": str(previous.crop_embeddings),
+        "previous_boxes": str(previous.boxes),
+    }
+    with duckdb.connect() as connection:
+        writer = _EmbeddingWriter(
+            path=fresh, schema=CROP_EMBEDDING_SCHEMA, dataset=dataset, split=split
+        )
+        try:
+            for batch in connection.execute(
+                query=_CROPS_WITH_NO_VECTOR, parameters=parameters
+            ).to_arrow_reader(ITEMS_PER_REQUEST):
+                rows = batch.to_pydict()
+                writer.add(
+                    file_names=rows["file_name"],
+                    box_keys=BoxKeys(ids=rows["box_id"], indices=rows["box_index"]),
+                    vectors=embedder.embed_crops(_build_crops(root=root, rows=rows)),
+                )
+        finally:
+            writer.close()
+        total = _write_query_rows(
+            connection=connection,
+            query=_CROP_VECTORS,
+            parameters={**parameters, "fresh": str(fresh)},
+            path=target,
+            schema=CROP_EMBEDDING_SCHEMA,
+        )
+    fresh.unlink()
+    return total, total - writer.count
+
+
+# `file_row_number` keeps every query in the order of the images or the boxes file,
+# which is the order the embedding files promise.
+_IMAGES_WITH_NO_VECTOR = """
+select n.file_name
+from read_parquet($rows, file_row_number = true) n
+anti join read_parquet($previous) p using (dataset, split, file_name)
+order by n.file_row_number
+"""
+
+_IMAGE_VECTORS = """
+select n.dataset, n.split, n.file_name,
+       coalesce(f.embedding, p.embedding) as embedding
+from read_parquet($rows, file_row_number = true) n
+left join read_parquet($previous) p using (dataset, split, file_name)
+left join read_parquet($fresh) f using (dataset, split, file_name)
+order by n.file_row_number
+"""
+
+# A vector of the run before, for each box whose coordinates did not change.
+_REUSABLE_CROPS = """
+select p.box_id, p.embedding
+from read_parquet($previous) p
+join read_parquet($previous_boxes) pb using (box_id)
+join read_parquet($rows) n using (box_id)
+where pb.x = n.x and pb.y = n.y and pb.w = n.w and pb.h = n.h
+"""
+
+_CROPS_WITH_NO_VECTOR = f"""
+with reusable as ({_REUSABLE_CROPS})
+select n.file_name, n.box_id, n.box_index, n.x, n.y, n.w, n.h
+from read_parquet($rows, file_row_number = true) n
+anti join reusable using (box_id)
+order by n.file_row_number
+"""
+
+_CROP_VECTORS = f"""
+with reusable as ({_REUSABLE_CROPS})
+select n.dataset, n.split, n.file_name, n.box_id, n.box_index,
+       coalesce(f.embedding, r.embedding) as embedding
+from read_parquet($rows, file_row_number = true) n
+left join reusable r using (box_id)
+left join read_parquet($fresh) f using (box_id)
+order by n.file_row_number
+"""
+
+
+def _write_query_rows(
+    *,
+    connection: duckdb.DuckDBPyConnection,
+    query: str,
+    parameters: dict[str, str],
+    path: Path,
+    schema: pa.Schema,
+) -> int:
+    count = 0
+    with pq.ParquetWriter(where=path, schema=schema) as writer:
+        for batch in connection.execute(
+            query=query, parameters=parameters
+        ).to_arrow_reader(ITEMS_PER_REQUEST):
+            writer.write_batch(batch.cast(schema))
+            count += batch.num_rows
+    return count
+
+
+def _build_crops(root: str, rows: dict[str, list]) -> list[Crop]:
+    return [
+        Crop.rounded_to_pixels(path=f"{root}/{name}", x=x, y=y, w=w, h=h)
+        for name, x, y, w, h in zip(
+            rows["file_name"], rows["x"], rows["y"], rows["w"], rows["h"], strict=True
+        )
+    ]
 
 
 class _EmbeddingWriter:
