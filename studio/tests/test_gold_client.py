@@ -45,6 +45,7 @@ def test_iter_pages_follows_the_cursor_to_the_last_page() -> None:
     assert all(
         request.headers["Accept"] == ARROW_STREAM_MEDIA_TYPE
         and request.url.params["dataset"] == "faces"
+        and request.url.params["release"] == "draft"
         for request in requests
     )
 

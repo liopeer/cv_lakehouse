@@ -75,7 +75,12 @@ class HttpGoldClient(GoldClient):
     def iter_pages(
         self, *, table: str, dataset: str, changed_since: datetime | None = None
     ) -> Iterator[pa.Table]:
-        params: dict[str, str | int] = {"dataset": dataset, "limit": ROWS_PER_PAGE}
+        # The curators work on the gold of now, not on a frozen release.
+        params: dict[str, str | int] = {
+            "dataset": dataset,
+            "release": "draft",
+            "limit": ROWS_PER_PAGE,
+        }
         if changed_since is not None:
             params["changed_since"] = changed_since.isoformat()
         while True:

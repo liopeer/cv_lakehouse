@@ -37,6 +37,8 @@ no code with `cv_lakehouse`.
 - The boxes are in the annotation collection `lakehouse`.
 - The id of an annotation is its `box_id` in gold, and the id of an image its `image_id`.
 - The MobileCLIP vectors of silver load too, so LightlyStudio embeds nothing.
+- The val and test rows are the draft of gold, not a frozen release, so a curator can
+  fix them. The fix reaches the next release.
 
 A run does nothing for a dataset whose gold version it already loaded. For a new gold
 version it reads every image and box, and only the vectors that changed.

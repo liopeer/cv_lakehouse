@@ -47,7 +47,8 @@ def client(embedding_lake: LakeResource, bronze_sources: dict[str, Path]) -> Tes
 
 
 def _rows(client: TestClient, path: str, **params: object) -> list[dict]:
-    response = client.get(url=path, params=params)
+    """Read one page of the gold that the curators work on."""
+    response = client.get(url=path, params={"release": "draft", **params})
     assert response.status_code == 200, response.text
     return response.json()["rows"]
 
@@ -109,7 +110,9 @@ def test_paging_returns_every_box_once(client: TestClient) -> None:
     seen: list[str] = []
     after: str | None = None
     while True:
-        params = {"limit": 3} if after is None else {"limit": 3, "after": after}
+        params: dict[str, object] = {"release": "draft", "limit": 3}
+        if after is not None:
+            params["after"] = after
         body = client.get(url="/v1/boxes", params=params).json()
         seen.extend(row["box_id"] for row in body["rows"])
         after = body["next_after"]
@@ -120,7 +123,9 @@ def test_paging_returns_every_box_once(client: TestClient) -> None:
 
 
 def test_boxes_come_as_an_arrow_stream_on_request(client: TestClient) -> None:
-    response = client.get(url="/v1/boxes", params={"limit": 4}, headers=ARROW)
+    response = client.get(
+        url="/v1/boxes", params={"release": "draft", "limit": 4}, headers=ARROW
+    )
     assert response.headers["content-type"] == ARROW_STREAM_MEDIA_TYPE
     table = pa.ipc.open_stream(response.content).read_all()
     assert table.schema == GOLD_BOX_SCHEMA
@@ -135,7 +140,9 @@ def test_embeddings_join_the_silver_vectors_onto_gold_ids(client: TestClient) ->
     }
     assert len(images[0]["embedding"]) == EMBEDDING_DIMENSION
 
-    response = client.get(url="/v1/crop_embeddings", headers=ARROW)
+    response = client.get(
+        url="/v1/crop_embeddings", params={"release": "draft"}, headers=ARROW
+    )
     crops = pa.ipc.open_stream(response.content).read_all()
     assert crops.schema == GOLD_CROP_EMBEDDING_SCHEMA
     # One vector per gold box. A flagged box has a vector in silver and none here.

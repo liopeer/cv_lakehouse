@@ -182,6 +182,7 @@ def build_gold_version(
                     commercial_use=silver.commercial_use,
                     silver_code_version=silver.code_version,
                     embedding_model=silver.embedding_model,
+                    correction_snapshot_id=silver.correction_snapshot_id,
                     splits=splits,
                 )
             )

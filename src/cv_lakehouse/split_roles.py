@@ -11,3 +11,8 @@ class SplitRole(StrEnum):
     TRAIN = "train"
     VAL = "val"
     TEST = "test"
+
+    @property
+    def is_eval(self) -> bool:
+        """Whether a result on this role is compared over time."""
+        return self is not SplitRole.TRAIN

@@ -11,6 +11,7 @@ a bound parameter.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -27,7 +28,12 @@ from cv_lakehouse.gold_schema import (
     gold_boxes_file,
     gold_images_file,
 )
-from cv_lakehouse.manifests import GoldManifest
+from cv_lakehouse.manifests import (
+    GoldDataset,
+    GoldManifest,
+    GoldSplit,
+    ReleaseManifest,
+)
 from cv_lakehouse.settings import LakePaths
 from cv_lakehouse.silver_schema import crop_embeddings_file, embeddings_file
 
@@ -82,13 +88,22 @@ def read_gold_page(
     *,
     paths: LakePaths,
     manifest: GoldManifest,
+    release: ReleaseManifest | None,
     table: GoldTable,
     row_filter: ImageFilter,
 ) -> GoldPage:
-    """Read at most `row_filter.limit` rows, in the order of the key of the table."""
+    """Read at most `row_filter.limit` rows, in the order of the key of the table.
+
+    With a release, the val and test rows are the frozen ones. Without one, they are
+    those of the current gold. The train rows are always those of the current gold.
+    """
     layout = _LAYOUTS[table]
     rows = _read_rows(
-        paths=paths, manifest=manifest, layout=layout, row_filter=row_filter
+        paths=paths,
+        manifest=manifest,
+        release=release,
+        layout=layout,
+        row_filter=row_filter,
     )
     # A full page can have a successor. A short page is the last one.
     is_full = rows.num_rows == row_filter.limit
@@ -102,11 +117,16 @@ def _read_rows(
     *,
     paths: LakePaths,
     manifest: GoldManifest,
+    release: ReleaseManifest | None,
     layout: _TableLayout,
     row_filter: ImageFilter,
 ) -> pa.Table:
     gold_files, embedding_files = _select_files(
-        paths=paths, manifest=manifest, layout=layout, row_filter=row_filter
+        paths=paths,
+        manifest=manifest,
+        release=release,
+        layout=layout,
+        row_filter=row_filter,
     )
     if not gold_files or (layout.embedding_join is not None and not embedding_files):
         return layout.schema.empty_table()
@@ -153,32 +173,47 @@ def _select_files(
     *,
     paths: LakePaths,
     manifest: GoldManifest,
+    release: ReleaseManifest | None,
     layout: _TableLayout,
     row_filter: ImageFilter,
 ) -> tuple[list[str], list[str]]:
     """Return the gold files and the silver embedding files of the selected splits."""
-    version_dir = paths.gold_version_dir(manifest.version)
     gold_file = gold_boxes_file if layout.reads_boxes else gold_images_file
     embedding_file = crop_embeddings_file if layout.reads_boxes else embeddings_file
     gold_files: list[Path] = []
     embedding_files: list[Path] = []
-    for dataset in manifest.datasets:
+    for directory, dataset, split in _iter_splits(
+        paths=paths, manifest=manifest, release=release
+    ):
         if row_filter.dataset and dataset.dataset not in row_filter.dataset:
             continue
-        for split in dataset.splits:
-            if row_filter.split and split.split not in row_filter.split:
-                continue
-            if row_filter.role and split.role not in row_filter.role:
-                continue
-            gold_files.append(
-                gold_file(
-                    version_dir=version_dir, dataset=dataset.dataset, split=split.split
+        if row_filter.split and split.split not in row_filter.split:
+            continue
+        if row_filter.role and split.role not in row_filter.role:
+            continue
+        gold_files.append(
+            gold_file(version_dir=directory, dataset=dataset.dataset, split=split.split)
+        )
+        if dataset.embedding_model is not None:
+            embedding_files.append(
+                embedding_file(
+                    silver_dir=paths.silver_dir(dataset.dataset), split=split.split
                 )
             )
-            if dataset.embedding_model is not None:
-                embedding_files.append(
-                    embedding_file(
-                        silver_dir=paths.silver_dir(dataset.dataset), split=split.split
-                    )
-                )
     return [str(path) for path in gold_files], [str(path) for path in embedding_files]
+
+
+def _iter_splits(
+    *, paths: LakePaths, manifest: GoldManifest, release: ReleaseManifest | None
+) -> Iterator[tuple[Path, GoldDataset, GoldSplit]]:
+    """Yield every split with the directory that holds its files."""
+    version_dir = paths.gold_version_dir(manifest.version)
+    for dataset in manifest.datasets:
+        for split in dataset.splits:
+            if release is None or not split.role.is_eval:
+                yield version_dir, dataset, split
+    if release is not None:
+        release_dir = paths.gold_release_dir(release.release)
+        for dataset in release.datasets:
+            for split in dataset.splits:
+                yield release_dir, dataset, split
