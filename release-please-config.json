@@ -63,7 +63,8 @@
       "include-component-in-tag": false,
       "changelog-path": "CHANGELOG.md",
       "exclude-paths": [
-        "triton"
+        "triton",
+        "studio"
       ],
       "extra-files": [
         {
@@ -77,6 +78,13 @@
       "release-type": "simple",
       "package-name": "triton",
       "component": "triton",
+      "include-component-in-tag": true,
+      "changelog-path": "CHANGELOG.md"
+    },
+    "studio": {
+      "release-type": "simple",
+      "package-name": "studio",
+      "component": "studio",
       "include-component-in-tag": true,
       "changelog-path": "CHANGELOG.md"
     }

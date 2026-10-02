@@ -1,0 +1,373 @@
+diff --git a/lightly_studio_view/src/lib/components/DatasetOverview/DatasetOverview.svelte b/lightly_studio_view/src/lib/components/DatasetOverview/DatasetOverview.svelte
+new file mode 100644
+index 0000000..25e518c
+--- /dev/null
++++ b/lightly_studio_view/src/lib/components/DatasetOverview/DatasetOverview.svelte
+@@ -0,0 +1,59 @@
++<script lang="ts">
++    import type { CollectionOverviewView } from '$lib/api/lightly_studio_local';
++    import { Badge } from '$lib/components/ui/badge';
++    import { routeHelpers } from '$lib/routes';
++    import { formatDate } from '$lib/utils';
++    import { Database } from '@lucide/svelte';
++
++    interface Props {
++        datasets: CollectionOverviewView[];
++    }
++
++    let { datasets }: Props = $props();
++
++    const toDataset = (dataset: CollectionOverviewView) =>
++        routeHelpers.toCollectionHome(
++            dataset.collection_id,
++            dataset.sample_type.toLowerCase(),
++            dataset.collection_id
++        );
++</script>
++
++<section class="mx-auto w-full max-w-5xl px-8 py-8">
++    <h1 class="mb-6 text-2xl font-semibold text-foreground">Datasets</h1>
++
++    {#if datasets.length === 0}
++        <div
++            class="flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-12 text-center"
++            data-testid="dataset-overview-empty"
++        >
++            <Database class="size-10 text-muted-foreground" />
++            <p class="text-lg font-medium text-foreground">No datasets yet</p>
++            <p class="text-sm text-muted-foreground">
++                Load a dataset with the LightlyStudio Python package, then refresh this page.
++            </p>
++        </div>
++    {:else}
++        <ul class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="dataset-overview-list">
++            {#each datasets as dataset (dataset.collection_id)}
++                <li>
++                    <a
++                        href={toDataset(dataset)}
++                        class="flex h-full flex-col gap-3 rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary"
++                    >
++                        <div class="flex items-start justify-between gap-2">
++                            <span class="break-all font-medium text-foreground">{dataset.name}</span
++                            >
++                            <Badge variant="secondary">{dataset.sample_type.toLowerCase()}</Badge>
++                        </div>
++                        <div class="mt-auto flex justify-between text-sm text-muted-foreground">
++                            <span>{dataset.total_sample_count.toLocaleString('en-US')} samples</span
++                            >
++                            <span>{formatDate(dataset.created_at)}</span>
++                        </div>
++                    </a>
++                </li>
++            {/each}
++        </ul>
++    {/if}
++</section>
+diff --git a/lightly_studio_view/src/lib/components/DatasetOverview/DatasetOverview.test.ts b/lightly_studio_view/src/lib/components/DatasetOverview/DatasetOverview.test.ts
+new file mode 100644
+index 0000000..1003034
+--- /dev/null
++++ b/lightly_studio_view/src/lib/components/DatasetOverview/DatasetOverview.test.ts
+@@ -0,0 +1,45 @@
++import { describe, it, expect } from 'vitest';
++import { render, screen } from '@testing-library/svelte';
++import { SampleType, type CollectionOverviewView } from '$lib/api/lightly_studio_local';
++import DatasetOverview from './DatasetOverview.svelte';
++
++const datasets: CollectionOverviewView[] = [
++    {
++        collection_id: 'images-1',
++        name: 'Street scenes',
++        sample_type: SampleType.IMAGE,
++        created_at: new Date('2026-02-01T10:00:00Z'),
++        total_sample_count: 1234
++    },
++    {
++        collection_id: 'videos-1',
++        name: 'Drone flights',
++        sample_type: SampleType.VIDEO,
++        created_at: new Date('2026-01-01T10:00:00Z'),
++        total_sample_count: 7
++    }
++];
++
++describe('DatasetOverview', () => {
++    it('lists every dataset with its sample count and a link to the dataset', () => {
++        render(DatasetOverview, { props: { datasets } });
++
++        expect(screen.getByText('Street scenes').closest('a')).toHaveAttribute(
++            'href',
++            '/datasets/images-1/image/images-1'
++        );
++        expect(screen.getByText('Drone flights').closest('a')).toHaveAttribute(
++            'href',
++            '/datasets/videos-1/video/videos-1'
++        );
++        expect(screen.getByText('1,234 samples')).toBeInTheDocument();
++        expect(screen.getByText('7 samples')).toBeInTheDocument();
++    });
++
++    it('shows an empty state when there are no datasets', () => {
++        render(DatasetOverview, { props: { datasets: [] } });
++
++        expect(screen.getByText('No datasets yet')).toBeInTheDocument();
++        expect(screen.queryByTestId('dataset-overview-list')).not.toBeInTheDocument();
++    });
++});
+diff --git a/lightly_studio_view/src/lib/components/DatasetOverview/index.ts b/lightly_studio_view/src/lib/components/DatasetOverview/index.ts
+new file mode 100644
+index 0000000..a2f8c41
+--- /dev/null
++++ b/lightly_studio_view/src/lib/components/DatasetOverview/index.ts
+@@ -0,0 +1 @@
++export { default as DatasetOverview } from './DatasetOverview.svelte';
+diff --git a/lightly_studio_view/src/lib/components/Header/Header.svelte b/lightly_studio_view/src/lib/components/Header/Header.svelte
+index caf1d21..3606e1f 100644
+--- a/lightly_studio_view/src/lib/components/Header/Header.svelte
++++ b/lightly_studio_view/src/lib/components/Header/Header.svelte
+@@ -83,15 +83,8 @@
+     <div class="p mb-3 border-b border-border-hard bg-card px-4 py-4 pl-8 text-diffuse-foreground">
+         <div class="flex items-center justify-between">
+             <div class="flex w-[320px]">
+-                {#if datasetCollection.data}
+-                    {@const dataset = datasetCollection.data}
+-                    <a
+-                        href="/datasets/{dataset.collection_id}/{dataset.sample_type.toLowerCase()}/{dataset.collection_id}"
+-                        ><Logo /></a
+-                    >
+-                {:else}
+-                    <a href="/"><Logo /></a>
+-                {/if}
++                <!-- The logo leads back to the dataset overview. -->
++                <a href="/"><Logo /></a>
+             </div>
+             <div class="flex flex-1 justify-start">
+                 {#if datasetCollection.data}
+diff --git a/lightly_studio_view/src/routes/+page.svelte b/lightly_studio_view/src/routes/+page.svelte
+new file mode 100644
+index 0000000..4ee7f60
+--- /dev/null
++++ b/lightly_studio_view/src/routes/+page.svelte
+@@ -0,0 +1,13 @@
++<script lang="ts">
++    import { Logo } from '$lib/components';
++    import { DatasetOverview } from '$lib/components/DatasetOverview';
++
++    let { data } = $props();
++</script>
++
++<header class="border-b border-border-hard bg-card px-4 py-4 pl-8">
++    <a href="/"><Logo /></a>
++</header>
++<main class="flex-1 overflow-y-auto">
++    <DatasetOverview datasets={data.datasets} />
++</main>
+diff --git a/lightly_studio_view/src/routes/+page.ts b/lightly_studio_view/src/routes/+page.ts
+index f20d4e1..c196301 100644
+--- a/lightly_studio_view/src/routes/+page.ts
++++ b/lightly_studio_view/src/routes/+page.ts
+@@ -1,24 +1,11 @@
+-import { readCollections } from '$lib/api/lightly_studio_local/sdk.gen';
+-import { redirect } from '@sveltejs/kit';
++import { readCollectionsOverview } from '$lib/api/lightly_studio_local/sdk.gen';
+ 
+ export const load = async () => {
+-    const { data } = await readCollections();
++    const { data, error } = await readCollectionsOverview();
+ 
+-    if (!data || data.length === 0) {
+-        throw new Error('No datasets found');
++    if (error) {
++        throw error;
+     }
+-    const mostRecentRootDataset = data
+-        .filter((collection) => collection.parent_collection_id == null)
+-        .toSorted(
+-            (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+-        )[0];
+ 
+-    if (!mostRecentRootDataset?.collection_id) {
+-        throw new Error('No valid root collection found');
+-    }
+-
+-    redirect(
+-        307,
+-        `/datasets/${mostRecentRootDataset.collection_id}/${mostRecentRootDataset.sample_type.toLowerCase()}/${mostRecentRootDataset.collection_id}`
+-    );
++    return { datasets: data ?? [] };
+ };
+diff --git a/lightly_studio_view/src/routes/page.test.ts b/lightly_studio_view/src/routes/page.test.ts
+index 317a6ae..045ba2a 100644
+--- a/lightly_studio_view/src/routes/page.test.ts
++++ b/lightly_studio_view/src/routes/page.test.ts
+@@ -2,141 +2,57 @@
+ import { load } from './+page';
+ import { vi } from 'vitest';
+ import * as sdkModule from '$lib/api/lightly_studio_local/sdk.gen';
+-import * as svelteKit from '@sveltejs/kit';
+ import { SampleType } from '$lib/api/lightly_studio_local';
+ 
+-vi.mock('@sveltejs/kit', () => {
+-    return {
+-        redirect: vi.fn() // Mock the redirect function
+-    };
+-});
+-
+ afterEach(() => {
+     vi.clearAllMocks();
+ });
+ 
+ describe('load function', () => {
+-    it('should redirect to the most recent root collection', async () => {
+-        const spyRedirect = vi.spyOn(svelteKit, 'redirect');
+-        const spyReadCollections = vi.spyOn(sdkModule, 'readCollections').mockResolvedValue({
+-            data: [
+-                {
+-                    collection_id: '1',
+-                    name: 'Old Collection',
+-                    parent_collection_id: null,
+-                    sample_type: SampleType.IMAGE,
+-                    created_at: new Date('2023-01-01'),
+-                    updated_at: new Date('2023-01-02')
+-                },
+-                {
+-                    collection_id: '2',
+-                    name: 'Recent Collection',
+-                    parent_collection_id: null,
+-                    sample_type: SampleType.IMAGE,
+-                    created_at: new Date('2023-02-01'),
+-                    updated_at: new Date('2023-02-02')
+-                }
+-            ],
+-            request: undefined,
+-            response: undefined
+-        });
+-
+-        await expect(load()).resolves.toBeUndefined();
+-
+-        expect(spyReadCollections).toHaveBeenCalled();
+-
+-        expect(spyRedirect).toHaveBeenCalledWith(
+-            307,
+-            `/datasets/2/image/2` // Should redirect to the most recent root collection using new route structure
+-        );
++    it('should return the datasets from the overview endpoint', async () => {
++        const datasets = [
++            {
++                collection_id: '1',
++                name: 'Dataset',
++                sample_type: SampleType.IMAGE,
++                created_at: new Date('2023-01-01'),
++                total_sample_count: 3
++            }
++        ];
++        const spyReadOverview = vi
++            .spyOn(sdkModule, 'readCollectionsOverview')
++            .mockResolvedValue({ data: datasets, request: undefined, response: undefined });
++
++        await expect(load()).resolves.toEqual({ datasets });
++        expect(spyReadOverview).toHaveBeenCalled();
+     });
+ 
+-    it('should filter out child collections and only consider root collections', async () => {
+-        const spyRedirect = vi.spyOn(svelteKit, 'redirect');
+-        const spyReadCollections = vi.spyOn(sdkModule, 'readCollections').mockResolvedValue({
+-            data: [
+-                {
+-                    collection_id: '1',
+-                    name: 'Root Collection',
+-                    parent_collection_id: null,
+-                    sample_type: SampleType.IMAGE,
+-                    created_at: new Date('2023-01-01'),
+-                    updated_at: new Date('2023-01-02')
+-                },
+-                {
+-                    collection_id: '2',
+-                    name: 'Child Collection',
+-                    parent_collection_id: '1',
+-                    sample_type: SampleType.IMAGE,
+-                    created_at: new Date('2023-02-01'),
+-                    updated_at: new Date('2023-02-02')
+-                }
+-            ],
+-            request: undefined,
+-            response: undefined
+-        });
+-
+-        await expect(load()).resolves.toBeUndefined();
+-
+-        expect(spyReadCollections).toHaveBeenCalled();
+-
+-        expect(spyRedirect).toHaveBeenCalledWith(
+-            307,
+-            `/datasets/1/image/1` // Should redirect to root collection, not child, using new route structure
+-        );
+-    });
+-
+-    it('should throw error when readCollections fails', async () => {
+-        const error = new Error('Not Found');
+-        vi.spyOn(sdkModule, 'readCollections').mockRejectedValue(error);
+-
+-        await expect(load()).rejects.toThrow(error);
+-    });
+-
+-    it('should throw error when no collections found', async () => {
+-        vi.spyOn(sdkModule, 'readCollections').mockResolvedValue({
+-            data: [],
++    it('should return an empty list when data is undefined', async () => {
++        vi.spyOn(sdkModule, 'readCollectionsOverview').mockResolvedValue({
++            data: undefined,
+             request: undefined,
+             response: undefined
+         });
+ 
+-        await expect(load()).rejects.toThrow('No datasets found');
++        await expect(load()).resolves.toEqual({ datasets: [] });
+     });
+ 
+-    it('should throw error when data is undefined', async () => {
+-        vi.spyOn(sdkModule, 'readCollections').mockResolvedValue({
++    it('should throw the API error', async () => {
++        const error = { detail: 'boom' };
++        vi.spyOn(sdkModule, 'readCollectionsOverview').mockResolvedValue({
+             data: undefined,
++            error,
+             request: undefined,
+             response: undefined
+         });
+ 
+-        await expect(load()).rejects.toThrow('No datasets found');
++        await expect(load()).rejects.toEqual(error);
+     });
+ 
+-    it('should throw error when no root collections exist', async () => {
+-        vi.spyOn(sdkModule, 'readCollections').mockResolvedValue({
+-            data: [
+-                {
+-                    collection_id: '1',
+-                    name: 'Child Collection 1',
+-                    parent_collection_id: 'some-parent',
+-                    sample_type: SampleType.IMAGE,
+-                    created_at: new Date('2023-01-01'),
+-                    updated_at: new Date('2023-01-02')
+-                },
+-                {
+-                    collection_id: '2',
+-                    name: 'Child Collection 2',
+-                    parent_collection_id: 'some-parent',
+-                    sample_type: SampleType.IMAGE,
+-                    created_at: new Date('2023-02-01'),
+-                    updated_at: new Date('2023-02-02')
+-                }
+-            ],
+-            request: undefined,
+-            response: undefined
+-        });
++    it('should throw when the request fails', async () => {
++        const error = new Error('Not Found');
++        vi.spyOn(sdkModule, 'readCollectionsOverview').mockRejectedValue(error);
+ 
+-        await expect(load()).rejects.toThrow('No valid root collection found');
++        await expect(load()).rejects.toThrow(error);
+     });
+ });

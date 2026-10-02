@@ -30,6 +30,7 @@ jobs:
       pull-requests: read
     outputs:
       triton: ${{ steps.filter.outputs.triton }}
+      studio: ${{ steps.filter.outputs.studio }}
     steps:
       - uses: actions/checkout@v7
       # The base images in triton/base build on a local machine, not here.
@@ -41,6 +42,8 @@ jobs:
             triton:
               - 'triton/**'
               - '!triton/base/**'
+            studio:
+              - 'studio/**'
 
   app-image:
     runs-on: ubuntu-latest
@@ -84,3 +87,40 @@ jobs:
           push: false
           outputs: type=cacheonly
           provenance: false
+
+  # The sync writes LightlyStudio tables, so its tests run against a real Postgres with
+  # pgvector, which they start with Docker.
+  studio-test:
+    needs: changes
+    if: needs.changes.outputs.studio == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: make -C studio test
+
+  studio-image:
+    needs: changes
+    if: needs.changes.outputs.studio == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [gui, sync]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: studio
+          target: ${{ matrix.target }}
+          push: false
+          provenance: false
+          cache-from: type=gha,scope=studio
+          cache-to: type=gha,scope=studio,mode=max

@@ -21,7 +21,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        package: [cv_lakehouse, cv_lakehouse-triton]
+        package: [cv_lakehouse, cv_lakehouse-triton, cv_lakehouse-studio, cv_lakehouse-studio-sync]
     steps:
       # The first release creates a package, and the delete action fails on a missing one.
       - name: Check that the package exists

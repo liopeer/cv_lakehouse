@@ -1,0 +1,42 @@
+[project]
+name = "cv_lakehouse_studio"
+version = "0.0.0"
+description = "LightlyStudio on Postgres, kept in step with the gold layer of cv_lakehouse."
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+dependencies = [
+    "httpx>=0.28.1",
+    # The image builds LightlyStudio from the tag in `versions.env`, with `patches/` on
+    # top. Keep this pin on the same version, so the tests run against the same schema.
+    "lightly-studio==1.1.2",
+    "psycopg[binary]>=3.2",
+    "pyarrow>=17.0.0",
+    "pydantic-settings>=2.15.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    # Direct, so that uv routes them to the CPU index. Nothing here trains.
+    "torch>=2.6.0",
+    "torchvision>=0.20.0",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cv_lakehouse_studio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
