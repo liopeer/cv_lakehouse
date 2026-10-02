@@ -36,7 +36,7 @@ _CREATE_STAGING_TABLES = (
     """
     create temp table stage_box (
         box_id uuid, image_id uuid, label text, confidence double precision,
-        x integer, y integer, width integer, height integer
+        x integer, y integer, width integer, height integer, origin text
     ) on commit drop
     """,
     """
@@ -91,6 +91,7 @@ def stage_boxes(session: Session, page: pa.Table) -> None:
             "y": _round_to_pixels(page.column("y")),
             "width": _round_to_pixels(page.column("w")),
             "height": _round_to_pixels(page.column("h")),
+            "origin": page.column("origin"),
         },
     )
 

@@ -39,6 +39,9 @@ from cv_lakehouse_studio.staging import (
 )
 from cv_lakehouse_studio.sync_state import SYNC_SCHEMA
 
+# The `origin` that gold gives a box that a curator drew.
+STUDIO_ORIGIN = "studio"
+
 
 @dataclass(frozen=True)
 class SyncReport:
@@ -245,12 +248,23 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         """,
     ),
     (
+        "loaded_images",
+        f"""
+        insert into {SYNC_SCHEMA}.loaded_image (image_id, dataset, split, file_name)
+        select image_id, :dataset, split, file_name from stage_image
+        on conflict (image_id) do nothing
+        """,
+    ),
+    (
+        # A box that a curator drew comes back from gold under the id that
+        # LightlyStudio gave it. It stays the curator's: the sync neither inserts it
+        # nor records it, so the export keeps it as a correction.
         "new_box_table",
         f"""
         create temp table new_box on commit drop as
         select staged.* from stage_box staged
         left join {SYNC_SCHEMA}.loaded_box loaded on loaded.box_id = staged.box_id
-        where loaded.box_id is null
+        where loaded.box_id is null and staged.origin <> '{STUDIO_ORIGIN}'
         """,
     ),
     (
@@ -286,8 +300,8 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         "new_boxes",
         f"""
         insert into {SYNC_SCHEMA}.loaded_box
-            (box_id, dataset, label, x, y, width, height)
-        select box_id, :dataset, label, x, y, width, height from new_box
+            (box_id, image_id, dataset, label, x, y, width, height)
+        select box_id, image_id, :dataset, label, x, y, width, height from new_box
         """,
     ),
     (

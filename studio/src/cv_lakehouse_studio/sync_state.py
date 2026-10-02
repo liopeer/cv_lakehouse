@@ -26,8 +26,17 @@ _STATEMENTS = (
     )
     """,
     f"""
+    create table if not exists {SYNC_SCHEMA}.loaded_image (
+        image_id uuid primary key,
+        dataset text not null,
+        split text not null,
+        file_name text not null
+    )
+    """,
+    f"""
     create table if not exists {SYNC_SCHEMA}.loaded_box (
         box_id uuid primary key,
+        image_id uuid not null,
         dataset text not null,
         label text not null,
         x integer not null,
@@ -39,6 +48,22 @@ _STATEMENTS = (
     f"""
     create index if not exists loaded_box_dataset
     on {SYNC_SCHEMA}.loaded_box (dataset)
+    """,
+    # The export publishes the corrections of a dataset as snapshots. A row never
+    # changes, so the bytes that the lake pinned stay the bytes that this serves.
+    f"""
+    create table if not exists {SYNC_SCHEMA}.snapshot (
+        dataset text not null,
+        sequence integer not null,
+        snapshot_id text not null,
+        parent_snapshot_id text,
+        created_at timestamptz not null,
+        row_count integer not null,
+        size integer not null,
+        sha256 text not null,
+        content bytea not null,
+        primary key (dataset, sequence)
+    )
     """,
 )
 
