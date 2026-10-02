@@ -16,6 +16,7 @@ from PIL import Image as PILImage
 
 from cv_lakehouse.class_registry import CanonicalClass, sha256_fingerprint
 from cv_lakehouse.sources.published_files import PublishedFile
+from cv_lakehouse.split_roles import SplitRole
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
 
@@ -32,6 +33,8 @@ class DatasetSpec:
     names.
     Silver then keeps the box and loses the label, and its consumer decides what the
     class is worth.
+
+    split_roles gives every split its role in gold. Two splits can share a role.
     """
 
     name: str
@@ -39,6 +42,7 @@ class DatasetSpec:
     license: str
     commercial_use: bool
     splits: tuple[str, ...]
+    split_roles: Mapping[str, SplitRole]
     category_map: Mapping[str, str]
     default_class: str
     notes: str = ""
@@ -48,12 +52,20 @@ class DatasetSpec:
         unknown = sorted(targets - CanonicalClass.all_class_names())
         if unknown:
             raise ValueError(f"{self.name} maps onto unknown classes {unknown}")
+        if set(self.split_roles) != set(self.splits):
+            raise ValueError(f"{self.name} needs one role for each of {self.splits}")
 
     @property
     def category_map_sha256_fingerprint(self) -> str:
         """A map change marks this dataset's silver asset stale."""
         pairs = sorted(f"{key}={value}" for key, value in self.category_map.items())
         return sha256_fingerprint([self.name, self.default_class, *pairs])
+
+    @property
+    def split_roles_sha256_fingerprint(self) -> str:
+        """A role change marks gold stale."""
+        pairs = sorted(f"{split}={role}" for split, role in self.split_roles.items())
+        return sha256_fingerprint([self.name, *pairs])
 
 
 @dataclass(frozen=True)

@@ -36,6 +36,7 @@ from cv_lakehouse.sources.published_files import (
     ChecksumKind,
     PublishedFile,
 )
+from cv_lakehouse.split_roles import SplitRole
 
 # The official page links its image archives to this Hugging Face repository, and
 # hosts every other file itself.
@@ -118,6 +119,7 @@ SPEC = DatasetSpec(
     license="CC-BY-NC-ND-4.0",
     commercial_use=False,
     splits=SPLITS,
+    split_roles={"train": SplitRole.TRAIN, "val": SplitRole.VAL},
     category_map={FACE.name: "face"},
     default_class="other",
     notes="Event photography. Strong on small and occluded faces, weak on road scenes.",

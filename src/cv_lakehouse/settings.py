@@ -44,6 +44,12 @@ class LakePaths:
     def silver_dir(self, name: str) -> Path:
         return self.root / "silver" / name
 
+    def gold_dir(self) -> Path:
+        return self.root / "gold"
+
+    def gold_version_dir(self, version: int) -> Path:
+        return self.gold_dir() / "versions" / str(version)
+
     def studio_database(self, name: str) -> Path:
         """A LightlyStudio DuckDB file, built from Parquet on demand.
 

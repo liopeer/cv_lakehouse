@@ -8,8 +8,9 @@ import dataclasses
 
 import pytest
 
-from cv_lakehouse.defs import silver
+from cv_lakehouse.defs import gold, silver
 from cv_lakehouse.sources.source_registry import SOURCE_BY_NAME
+from cv_lakehouse.split_roles import SplitRole
 
 
 def _silver_versions() -> dict[str, str | None]:
@@ -52,3 +53,24 @@ def test_a_new_embedding_model_marks_every_silver_asset_stale(
 
     after = _silver_versions()
     assert all(after[name] != before[name] for name in before)
+
+
+def test_a_split_role_change_marks_gold_stale_and_no_silver_asset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    silver_before = _silver_versions()
+    gold_before = gold.build_gold_asset().get_asset_spec().code_version
+    source = SOURCE_BY_NAME["wider_face"]
+    changed = dataclasses.replace(
+        source.spec, split_roles={"train": SplitRole.TRAIN, "val": SplitRole.TEST}
+    )
+    monkeypatch.setattr(target=source, name="spec", value=changed)
+
+    assert gold.build_gold_asset().get_asset_spec().code_version != gold_before
+    assert _silver_versions() == silver_before
+
+
+def test_a_spec_rejects_a_split_with_no_role() -> None:
+    spec = SOURCE_BY_NAME["wider_face"].spec
+    with pytest.raises(expected_exception=ValueError, match="one role"):
+        dataclasses.replace(spec, split_roles={"train": SplitRole.TRAIN})
