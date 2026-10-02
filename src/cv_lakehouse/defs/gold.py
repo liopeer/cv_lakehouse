@@ -20,7 +20,7 @@ from cv_lakehouse.sources.source_registry import SOURCE_BY_NAME
 GOLD_KEY = dg.AssetKey(["gold", "current"])
 
 # Bump this when the gold rules change, such as which boxes drop out.
-GOLD_LOGIC_VERSION = "1"
+GOLD_LOGIC_VERSION = "2"
 
 
 def build_gold_asset() -> dg.AssetsDefinition:

@@ -74,7 +74,7 @@ class RawImageNormalizer:
             canonical_class = self._category_map.get(
                 raw.source_class.lower(), self._default_class
             )
-            box = _clip_to_image(
+            box = clip_to_image(
                 box=BoundingBox(
                     xmin=raw.xmin, ymin=raw.ymin, xmax=raw.xmax, ymax=raw.ymax
                 ),
@@ -105,7 +105,8 @@ class RawImageNormalizer:
             box_index += 1
 
 
-def _clip_to_image(box: BoundingBox, width: int, height: int) -> BoundingBox | None:
+def clip_to_image(*, box: BoundingBox, width: int, height: int) -> BoundingBox | None:
+    """Clip a box to its image. Return None when no area is left."""
     xmin = min(max(box.xmin, 0.0), float(width))
     ymin = min(max(box.ymin, 0.0), float(height))
     xmax = min(max(box.xmax, 0.0), float(width))

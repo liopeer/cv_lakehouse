@@ -240,7 +240,7 @@ def test_silver_checks_pass(
         )
         assert result.success
         evaluations = result.get_asset_check_evaluations()
-        assert len(evaluations) == 2
+        assert len(evaluations) == 3
         assert all(evaluation.passed for evaluation in evaluations)
 
 

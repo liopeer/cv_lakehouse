@@ -81,6 +81,8 @@ class SilverManifest(BaseModel):
     splits: list[str]
     # The model behind the embedding files, or None when the run wrote none.
     embedding_model: str | None = None
+    # The correction snapshot that this silver applied, or None for the bare source.
+    correction_snapshot_id: str | None = None
 
 
 class GoldSplit(BaseModel):
