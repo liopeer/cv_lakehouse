@@ -150,6 +150,7 @@ def build_gold_version(
                     previous_path=_find_previous_file(
                         previous_dir=previous_dir,
                         gold_file=gold_images_file,
+                        schema=GOLD_IMAGE_SCHEMA,
                         dataset=spec.name,
                         split=split,
                     ),
@@ -169,6 +170,7 @@ def build_gold_version(
                     previous_path=_find_previous_file(
                         previous_dir=previous_dir,
                         gold_file=gold_boxes_file,
+                        schema=GOLD_BOX_SCHEMA,
                         dataset=spec.name,
                         split=split,
                     ),
@@ -207,13 +209,17 @@ def _find_previous_file(
     *,
     previous_dir: Path | None,
     gold_file: Callable[..., Path],
+    schema: pa.Schema,
     dataset: str,
     split: str,
 ) -> Path | None:
     if previous_dir is None:
         return None
     path = gold_file(version_dir=previous_dir, dataset=dataset, split=split)
-    return path if path.exists() else None
+    if not path.exists():
+        return None
+    # A version that an older schema wrote has nothing to compare a new column with.
+    return path if pq.read_schema(path) == schema else None
 
 
 def _write_rows(

@@ -98,6 +98,30 @@ LightlyStudio cannot display these yet: its `CreateObjectDetection` carries a cl
 a confidence and a box, and its public `Annotation` exposes no metadata. They are there
 for a query and for training.
 
+### Corrections in silver
+
+Silver applies the latest [correction snapshot](#corrections) of its dataset on top of
+the normalised source. Bronze stays as published.
+
+| A curator | Silver |
+| --- | --- |
+| relabels a box | takes the class. The box keeps its exact float coordinates |
+| moves a box | takes the whole pixels of LightlyStudio, clipped to the image |
+| deletes a box | drops it, and counts it under `dropped_reasons` as `studio_deleted` |
+| draws a box | adds it, under the id that LightlyStudio gave it |
+
+- Three columns say what happened to a box: `origin` is `source` or `studio`, and
+  `is_class_corrected` and `is_geometry_corrected` mark a change.
+- A corrected box keeps its `attr_*` grades and its `source_class`. A drawn box has
+  neither.
+- A label that the class registry does not name becomes `other`, and `source_class`
+  carries the label. To make it a class, add it to the registry.
+- The check `corrections_are_applied` lists such labels, and the corrections that found
+  no box. It warns and never blocks.
+- `_silver.json` names the snapshot that silver applied.
+
+A new snapshot marks silver stale. Rebuild silver and gold by hand.
+
 ### Flagged boxes
 
 Silver keeps every box a source publishes, including the ones a flag disqualifies, and
@@ -426,6 +450,7 @@ src/cv_lakehouse/
   class_registry.py  the canonical classes every layer shares
   settings.py        pydantic-settings, prefix CV_LAKEHOUSE_
   normalization.py   normalise one dataset onto the canonical classes
+  correction_overlay.py  apply the corrections of the curators in silver
   silver_schema.py   the Parquet schema silver writes, and the streaming writer
   box_identity.py    the ids of an image and of a box
   split_roles.py     the roles a split can have in gold

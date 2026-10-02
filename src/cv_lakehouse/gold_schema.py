@@ -62,6 +62,9 @@ GOLD_BOX_SCHEMA = pa.schema(
         pa.field(name="h", type=pa.float64(), nullable=False),
         pa.field(name="confidence", type=pa.float64()),
         *(field for field in ATTRIBUTE_COLUMNS if field.name not in FLAG_COLUMNS),
+        pa.field(name="origin", type=pa.string(), nullable=False),
+        pa.field(name="is_class_corrected", type=pa.bool_(), nullable=False),
+        pa.field(name="is_geometry_corrected", type=pa.bool_(), nullable=False),
         pa.field(name="commercial_use", type=pa.bool_(), nullable=False),
         _CHANGED_AT_FIELD,
     ]

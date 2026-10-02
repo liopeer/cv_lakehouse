@@ -24,6 +24,11 @@ from cv_lakehouse.class_registry import (
     class_registry_sha256_fingerprint,
     sha256_fingerprint,
 )
+from cv_lakehouse.correction_overlay import CorrectionOverlay
+from cv_lakehouse.defs.corrections import (
+    build_corrections_key,
+    read_corrections_manifest,
+)
 from cv_lakehouse.defs.resources import LakeResource
 from cv_lakehouse.embeddings import (
     EMBEDDING_MODEL,
@@ -52,7 +57,7 @@ EDGE_TOLERANCE_PIXELS = 1e-6
 
 
 # Bump this when the normalisation rules change, such as clipping or the drop policy.
-SILVER_LOGIC_VERSION = "5"
+SILVER_LOGIC_VERSION = "6"
 
 
 def build_silver_asset(name: str) -> dg.AssetsDefinition:
@@ -71,13 +76,14 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
 
     @dg.asset(
         key=dg.AssetKey(["silver", name]),
-        deps=[dg.AssetKey(["bronze", name])],
+        deps=[dg.AssetKey(["bronze", name]), build_corrections_key(name)],
         group_name="silver",
         kinds={"file"},
         code_version=code_version,
         description=(
-            f"{name} on the class registry, as one images and one boxes Parquet per "
-            "split. Per box `attr_*` columns carry what the source published; "
+            f"{name} on the class registry, with the corrections of the curators "
+            "applied, as one images and one boxes Parquet per split. Per box "
+            "`attr_*` columns carry what the source published; "
             "LightlyStudio cannot display them yet. A configured Triton server adds "
             f"one {EMBEDDING_MODEL} embedding per image and per box crop."
         ),
@@ -89,6 +95,13 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
         bronze_dir = lake.paths.bronze_dir(name)
         bronze = read_manifest(path=bronze_dir / BRONZE_MANIFEST, model=BronzeManifest)
         silver_dir = lake.paths.silver_dir(name)
+        corrections = read_corrections_manifest(paths=lake.paths, name=name)
+        snapshot = corrections.snapshots[-1] if corrections.snapshots else None
+        overlay = CorrectionOverlay.from_snapshot(
+            None
+            if snapshot is None
+            else lake.paths.corrections_dir(name) / snapshot.file.path
+        )
 
         embedder: Embedder | None = (
             TritonEmbedder(lake.triton_url) if lake.triton_url is not None else None
@@ -114,8 +127,13 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 silver_dir=silver_dir,
                 dataset=name,
                 split=split,
-                images=normalizer.normalize_to_silver_images(
-                    read_raw_images(source=source, bronze_dir=bronze_dir, split=split)
+                images=overlay.apply_to_silver_images(
+                    split=split,
+                    images=normalizer.normalize_to_silver_images(
+                        read_raw_images(
+                            source=source, bronze_dir=bronze_dir, split=split
+                        )
+                    ),
                 ),
             )
             if embedder is None:
@@ -139,6 +157,8 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 f"{sum(normalizer.dropped_box_reasons.values())} dropped, "
                 f"{written_vectors + written_crops} embeddings"
             )
+        # The overlay counts across the splits, so its tally joins once.
+        dropped_box_reasons.update(overlay.dropped_box_reasons)
 
         write_manifest(
             path=silver_dir / SILVER_MANIFEST,
@@ -150,6 +170,9 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 image_roots=bronze.image_roots,
                 splits=list(bronze.splits),
                 embedding_model=EMBEDDING_MODEL if embedder is not None else None,
+                correction_snapshot_id=(
+                    None if snapshot is None else snapshot.snapshot_id
+                ),
             ),
         )
         return dg.MaterializeResult(
@@ -161,6 +184,10 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 num_crop_embeddings=num_crop_embeddings,
                 dropped_box_reasons=dropped_box_reasons,
                 embedded=embedder is not None,
+                correction_snapshot_id=(
+                    "none" if snapshot is None else snapshot.snapshot_id
+                ),
+                num_corrections_applied=overlay.num_applied,
             )
         )
 
@@ -202,6 +229,8 @@ def _build_run_metadata(
     num_crop_embeddings: int,
     dropped_box_reasons: Mapping[str, int],
     embedded: bool,
+    correction_snapshot_id: str,
+    num_corrections_applied: int,
 ) -> dict:
     """What this run did, for the Dagster UI. Not persisted beside the data."""
     return {
@@ -212,6 +241,8 @@ def _build_run_metadata(
         "embedding_model": EMBEDDING_MODEL if embedded else "none",
         "license": license_name,
         "dropped_reasons": dg.MetadataValue.json(dict(dropped_box_reasons)),
+        "correction_snapshot": correction_snapshot_id,
+        "num_corrections_applied": num_corrections_applied,
     }
 
 
@@ -298,7 +329,63 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
             },
         )
 
-    return [_boxes_are_valid, _images_exist]
+    @dg.asset_check(
+        asset=key,
+        name="corrections_are_applied",
+        description=(
+            "Every correction found its box, and every label of a curator is a class "
+            "of the registry."
+        ),
+    )
+    def _corrections_are_applied(lake: LakeResource) -> dg.AssetCheckResult:
+        """Report what the overlay could not apply as the curator meant it.
+
+        Neither case fails the run. A box with an unknown label is in silver as
+        `other`, and a correction with no box changes nothing.
+        """
+        silver_dir = lake.paths.silver_dir(name)
+        manifest = read_manifest(
+            path=silver_dir / SILVER_MANIFEST, model=SilverManifest
+        )
+        snapshot_path = next(
+            (
+                lake.paths.corrections_dir(name) / snapshot.file.path
+                for snapshot in read_corrections_manifest(
+                    paths=lake.paths, name=name
+                ).snapshots
+                if snapshot.snapshot_id == manifest.correction_snapshot_id
+            ),
+            None,
+        )
+        if snapshot_path is None:
+            return dg.AssetCheckResult(passed=True, metadata={"snapshot": "none"})
+        parameters = {
+            "snapshot": str(snapshot_path),
+            "boxes": str(silver_dir / "boxes" / "*.parquet"),
+        }
+        with duckdb.connect() as connection:
+            orphans = connection.execute(
+                query=_ORPHAN_CORRECTION_QUERY, parameters=parameters
+            ).fetchall()
+            unknown_labels = connection.execute(
+                query=_UNKNOWN_LABEL_QUERY,
+                parameters={
+                    "snapshot": str(snapshot_path),
+                    "names": sorted(CanonicalClass.all_class_names()),
+                },
+            ).fetchall()
+        return dg.AssetCheckResult(
+            passed=not orphans and not unknown_labels,
+            severity=dg.AssetCheckSeverity.WARN,
+            metadata={
+                "snapshot": manifest.correction_snapshot_id,
+                "num_orphans": len(orphans),
+                "orphans": [f"{action} {box_id}" for box_id, action in orphans[:10]],
+                "unknown_labels": [label for (label,) in unknown_labels],
+            },
+        )
+
+    return [_boxes_are_valid, _images_exist, _corrections_are_applied]
 
 
 _IMAGE_NAME_QUERY = "select file_name from read_parquet($path) order by file_name"
@@ -337,6 +424,25 @@ judged as (
     from joined
 )
 select file_name, problem from judged where problem is not null
+"""
+
+
+# A changed or an added box that silver does not hold. Its source box is gone, its
+# image is not in the split, or the corrected box has no area inside the image. A
+# deleted box leaves no trace either way, so this cannot report it.
+_ORPHAN_CORRECTION_QUERY = """
+select c.box_id, c.action
+from read_parquet($snapshot) c
+left join read_parquet($boxes) b on b.box_id = c.box_id
+where c.action <> 'delete' and b.box_id is null
+order by c.box_id
+"""
+
+_UNKNOWN_LABEL_QUERY = """
+select distinct label_name
+from read_parquet($snapshot)
+where label_name is not null and not list_contains($names, lower(label_name))
+order by label_name
 """
 
 

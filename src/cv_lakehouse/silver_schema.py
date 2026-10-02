@@ -76,6 +76,10 @@ BOX_SCHEMA = pa.schema(
         pa.field(name="h", type=pa.float64(), nullable=False),
         pa.field(name="confidence", type=pa.float64()),
         *ATTRIBUTE_COLUMNS,
+        # Where the box comes from, and what a curator changed on it.
+        pa.field(name="origin", type=pa.string(), nullable=False),
+        pa.field(name="is_class_corrected", type=pa.bool_(), nullable=False),
+        pa.field(name="is_geometry_corrected", type=pa.bool_(), nullable=False),
     ]
 )
 
@@ -127,6 +131,13 @@ def crop_embeddings_file(silver_dir: Path, split: str) -> Path:
     return silver_dir / "crop_embeddings" / f"{split}.parquet"
 
 
+class BoxOrigin:
+    # The publisher of the dataset annotated the box.
+    SOURCE = "source"
+    # A curator drew the box in LightlyStudio.
+    STUDIO = "studio"
+
+
 @dataclass(frozen=True)
 class SilverBox:
     """One box on a canonical class, in pixel XYWH, clipped to its image.
@@ -146,6 +157,9 @@ class SilverBox:
     h: float
     confidence: float | None = None
     attrs: Mapping[str, int | bool | None] = field(default_factory=dict)
+    origin: str = BoxOrigin.SOURCE
+    is_class_corrected: bool = False
+    is_geometry_corrected: bool = False
 
 
 @dataclass(frozen=True)
@@ -227,6 +241,9 @@ def write_split(
                         "h": box.h,
                         "confidence": box.confidence,
                         **box.attrs,
+                        "origin": box.origin,
+                        "is_class_corrected": box.is_class_corrected,
+                        "is_geometry_corrected": box.is_geometry_corrected,
                     }
                 )
     finally:
