@@ -267,6 +267,9 @@ export CV_LAKEHOUSE_ROOT=/Volumes/data/cv_lakehouse   # defaults to ./data
 $CV_LAKEHOUSE_ROOT/
   bronze/<dataset>/            a manual download, or a symlink to a complete copy
     _bronze.json                 every published file, with its URL and checksum
+  bronze/<dataset>_corrections/  the corrections that curators made in LightlyStudio
+    _corrections.json            every snapshot, with its checksum
+    snapshots/<id>/corrections.parquet   one immutable snapshot
   silver/<dataset>/
     images/<split>.parquet           one row per image
     boxes/<split>.parquet            one row per box, XYWH pixels, exact floats
@@ -360,6 +363,28 @@ takes the curated one.
 
 Open Images is about 740 GB: 560 GB of image tars, 130 GB of narrative voice recordings,
 and the rest annotations.
+
+### Corrections
+
+A curator fixes annotations in LightlyStudio. The export of [studio/](studio/README.md)
+publishes the fixes of a dataset as snapshots, and the asset
+`bronze/<dataset>_corrections` fetches them.
+
+```bash
+export CV_LAKEHOUSE_STUDIO_EXPORT_URL=http://studio-sync:8002
+```
+
+- A snapshot is one Parquet file that never changes. It holds every correction that is
+  live when it is made, so the latest snapshot alone says what to change.
+- Bronze verifies the size and the checksum of a snapshot, and pins them in
+  `_corrections.json`.
+- Each snapshot names the one before it. The run fails when the chain breaks, or when
+  the export lists fewer snapshots than bronze holds. A LightlyStudio database that was
+  lost then cannot silently drop every correction.
+- The asset has no upstream asset, so the graph stays acyclic.
+- When the variable is unset, the asset fetches nothing and still succeeds.
+
+Materialize the asset by hand in the UI. Nothing schedules it.
 
 ## Running it
 

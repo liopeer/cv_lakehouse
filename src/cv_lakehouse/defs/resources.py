@@ -19,6 +19,7 @@ class LakeResource(dg.ConfigurableResource):
     download_workers: int
     request_timeout_seconds: float
     triton_url: str | None = None
+    studio_export_url: str | None = None
 
     @classmethod
     def from_env(cls) -> Self:
@@ -28,6 +29,7 @@ class LakeResource(dg.ConfigurableResource):
             download_workers=settings.download_workers,
             request_timeout_seconds=settings.request_timeout_seconds,
             triton_url=settings.triton_url,
+            studio_export_url=settings.studio_export_url,
         )
 
     @property

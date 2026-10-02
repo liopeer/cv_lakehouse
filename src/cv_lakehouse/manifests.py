@@ -19,6 +19,7 @@ from cv_lakehouse.split_roles import SplitRole
 BRONZE_MANIFEST = "_bronze.json"
 SILVER_MANIFEST = "_silver.json"
 GOLD_MANIFEST = "_gold.json"
+CORRECTIONS_MANIFEST = "_corrections.json"
 
 
 class BronzeMode(StrEnum):
@@ -40,6 +41,26 @@ class BronzeManifest(BaseModel):
     # Every file the publisher publishes, with its URL and its checksum. A linked copy
     # lists them too: they define what a complete copy is.
     published_files: list[PublishedFile] = Field(default_factory=list)
+
+
+class CorrectionSnapshot(BaseModel):
+    snapshot_id: str
+    sequence: int
+    parent_snapshot_id: str | None
+    created_at: datetime
+    row_count: int
+    # The pin: the size and the checksum that the download verified.
+    file: PublishedFile
+
+
+class CorrectionsManifest(BaseModel):
+    """The correction snapshots of one dataset, oldest first.
+
+    Silver applies the last one. The others are history.
+    """
+
+    dataset: str
+    snapshots: list[CorrectionSnapshot] = Field(default_factory=list)
 
 
 class SilverManifest(BaseModel):

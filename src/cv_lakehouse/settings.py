@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Unset means silver writes no embedding, which is what lets a machine with no
     # server still build the layer.
     triton_url: str | None = None
+    # The export of `studio/`, such as http://studio-sync:8002. Unset means that the
+    # corrections assets fetch nothing, so a lake with no LightlyStudio still builds.
+    studio_export_url: str | None = None
 
 
 class LakePaths:
@@ -40,6 +43,9 @@ class LakePaths:
 
     def bronze_dir(self, name: str) -> Path:
         return self.root / "bronze" / name
+
+    def corrections_dir(self, name: str) -> Path:
+        return self.root / "bronze" / f"{name}_corrections"
 
     def silver_dir(self, name: str) -> Path:
         return self.root / "silver" / name
