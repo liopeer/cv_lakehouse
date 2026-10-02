@@ -26,6 +26,14 @@ so bronze decides nothing about the content.
 
 A source lists its files in `published_files`. It holds no download code.
 
+A corrections asset is the one exception to the static file list. Its files are the
+snapshots that the LightlyStudio export publishes, so the list is not known before the
+run. The same rules apply at the download:
+
+- Take the size and the checksum of each file from the listing, and verify them.
+- Pin them in the manifest. A later listing that disagrees with a pin fails the run.
+- Never change or delete a snapshot that bronze holds.
+
 ## Commands
 
 Use the Makefile. Do not call `uv run`, `ruff`, `pyrefly` or `pytest` directly.
