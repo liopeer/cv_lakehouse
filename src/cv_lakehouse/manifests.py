@@ -20,6 +20,7 @@ BRONZE_MANIFEST = "_bronze.json"
 SILVER_MANIFEST = "_silver.json"
 GOLD_MANIFEST = "_gold.json"
 CORRECTIONS_MANIFEST = "_corrections.json"
+RELEASE_MANIFEST = "_release.json"
 
 
 class BronzeMode(StrEnum):
@@ -99,6 +100,8 @@ class GoldDataset(BaseModel):
     silver_code_version: str
     # Gold copies no vector. A reader takes them from the silver files of this dataset.
     embedding_model: str | None
+    # The correction snapshot that the silver of this dataset applied.
+    correction_snapshot_id: str | None = None
     splits: list[GoldSplit]
 
 
@@ -113,6 +116,29 @@ class GoldManifest(BaseModel):
     built_at: datetime
     code_version: str
     datasets: list[GoldDataset]
+
+
+class ReleaseFile(BaseModel):
+    # Relative to the release directory.
+    path: str
+    size: int
+    sha256: str
+
+
+class ReleaseManifest(BaseModel):
+    """One frozen copy of the val and test rows of every dataset.
+
+    A benchmark names the release it ran on, so two results on one release compare.
+    The manifest says what the release was built from, and pins every file.
+    """
+
+    release: int
+    created_at: datetime
+    gold_version: int
+    gold_code_version: str
+    # The datasets as gold held them, with only their val and test splits.
+    datasets: list[GoldDataset]
+    files: list[ReleaseFile]
 
 
 def write_manifest(path: Path, manifest: BaseModel) -> None:

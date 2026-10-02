@@ -249,18 +249,37 @@ duckdb -c "select dataset, role, class_name, count(*)
 
 A dataset with no silver on disk is left out, and the run logs its name.
 
+### Eval releases
+
+Gold changes with every correction, and a benchmark must not. The asset
+`gold/eval_release` freezes the val and test rows of every dataset under a number.
+
+- Each run copies the val and test files of the current gold version to
+  `gold/releases/<number>/`, and writes `_release.json` with the checksum of every file.
+- A release never changes. The check `releases_are_unchanged` verifies every checksum.
+- The curators keep working on the gold above it. Their fixes to a val or a test row
+  reach the next release, and no earlier one.
+- The run fails when the val and test rows are those of the last release.
+- One number covers every dataset, so a benchmark names one release.
+- `_release.json` names the gold version, the silver code version and the correction
+  snapshot of each dataset.
+- A release holds no vector.
+
+Run the asset by hand, when a round of corrections is done.
+
 ### The gold API
 
 A read only HTTP API serves gold, so a consumer needs no access to the lake files.
 
 ```bash
 make api
-curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face'
+curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face&release=1'
 ```
 
 | Endpoint | Rows |
 | --- | --- |
 | `/v1/meta` | the gold manifest: the version, the datasets, the splits and their roles |
+| `/v1/releases`, `/v1/releases/{n}` | the eval releases, each with its files |
 | `/v1/classes` | the class registry, also before gold exists |
 | `/v1/images` | one per image |
 | `/v1/boxes` | one per box |
@@ -270,10 +289,17 @@ curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face'
 | Parameter | Selects |
 | --- | --- |
 | `dataset`, `split`, `role` | rows of these datasets, splits or roles |
+| `release` | which val and test rows: the number of a release, or `draft` |
 | `class_name` | boxes of these classes. Not on `/v1/images` and `/v1/embeddings` |
 | `commercial_use` | rows of the datasets with this licence answer |
 | `changed_since` | rows that a gold build changed after this time |
 | `limit`, `after` | one page. `limit` is 1000 by default and at most 100000 |
+
+A request that can return val or test rows must name a `release`. A number gives the
+frozen rows of that release, and `draft` gives the gold that the curators work on. So a
+benchmark never moves to other rows without a change on its side. Train rows are always
+those of the current gold, and a request with only `role=train` needs no release. The
+vector endpoints serve the draft only.
 
 A parameter that is given more than once matches any of its values. The rows come in
 the order of their id. A full page carries `next_after`, and the next request sends it
@@ -308,6 +334,7 @@ $CV_LAKEHOUSE_ROOT/
     _gold.json                       the current version, and its datasets
     versions/<n>/images/<dataset>/<split>.parquet   one row per image
     versions/<n>/boxes/<dataset>/<split>.parquet    one row per box
+    releases/<number>/               the frozen val and test files of one release
   .studio/<name>.db            a LightlyStudio cache, safe to delete
 ```
 
@@ -328,6 +355,7 @@ The loop, each step by hand:
 3. Materialize `silver/<dataset>`, and then `gold/current`.
 4. The sync sees the new gold version on its next run. The corrected boxes stay as the
    curator left them.
+5. When a round of corrections is done, materialize `gold/eval_release`.
 
 ## Browsing silver in LightlyStudio
 
@@ -469,6 +497,7 @@ src/cv_lakehouse/
   split_roles.py     the roles a split can have in gold
   gold_schema.py     the Parquet schema gold writes
   gold_build.py      build one gold version from the silver datasets on disk
+  gold_release.py    freeze the val and test rows of gold as a numbered release
   gold_api/          the HTTP API over gold
   embeddings.py      the MobileCLIP client, and the embedding Parquet it writes
   manifests.py       what each layer writes beside its output
