@@ -2,9 +2,9 @@
 .github/
 .venv/
 
-__pycache__/
-*.pyc
-.pytest_cache/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
 .ruff_cache/
 .pyrefly_cache/
 
@@ -15,9 +15,11 @@ __pycache__/
 # The lake itself, when CV_LAKEHOUSE_ROOT is left at its default.
 data/
 
-# Not part of the code location. `triton/` and `studio/` build their own images.
+# Not part of a code location. `triton/` and `studio/` build their own images. The
+# lock names studio as a member, so its pyproject.toml stays for `uv sync`.
 triton/
-studio/
-tests/
-tools/
+studio/*
+!studio/pyproject.toml
+**/tests/
+docs/
 dev/

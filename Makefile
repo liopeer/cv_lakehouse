@@ -8,13 +8,13 @@
 UV_RUN := uv run --frozen
 
 .PHONY: help sync lock license-headers format format-check lint lint-fix typecheck test \
-	defs dev api image studio check clean
+	defs dev api image check clean
 
 help:  ## List targets.
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
 
 sync:  ## Install dependencies from the lock file.
-	uv sync --frozen
+	uv sync --frozen --all-packages
 
 lock:  ## Update the lock file after a dependency change.
 	uv lock
@@ -46,29 +46,29 @@ lint-fix: sync  ## Fix lint problems.
 typecheck: sync  ## Check the types.
 	$(UV_RUN) pyrefly check
 
+# One run per test directory. `domains/cv/tests` and `studio/tests` are both the package
+# `tests`, so one run cannot import them both. studio has its own target, as it needs
+# Docker.
 test: sync  ## Run the unit tests.
-	$(UV_RUN) pytest
+	$(UV_RUN) pytest tests
+	$(UV_RUN) pytest packages/lakehouse_core/tests
+	$(UV_RUN) pytest domains/cv/tests
 
+# The workspace has one virtualenv at its root, so dg uses it and not one per project.
 defs: sync  ## Validate the Dagster definitions.
-	$(UV_RUN) dg check defs
+	$(UV_RUN) dg check defs --use-active-venv
 
 dev: sync  ## Start the Dagster UI on port 3000.
-	$(UV_RUN) dg dev
+	$(UV_RUN) dg dev --use-active-venv
 
 api: sync  ## Serve gold over HTTP on port 8000.
-	$(UV_RUN) uvicorn --factory cv_lakehouse.gold_api.app:create_app_from_env --port 8000
+	$(UV_RUN) uvicorn --factory lakehouse_cv.gold_api.app:create_app_from_env --port 8000
 
 image:  ## Build the Dagster code location image, as the release does.
-	docker build -t cv_lakehouse:dev .
-
-# Silver is Parquet. This builds a LightlyStudio database from it on demand, under
-# $$CV_LAKEHOUSE_ROOT/.studio, which is a cache and safe to delete. A standalone script
-# with its own dependencies, so the package needs no GUI: uv reads them from its header.
-studio:  ## Browse silver in LightlyStudio. make studio DATASETS="wider_face"
-	uv run tools/studio.py $(DATASETS)
+	docker build -f domains/cv/Dockerfile -t cv_lakehouse:dev .
 
 check: format-check lint typecheck test defs  ## Run every check.
 
 clean:  ## Remove the caches.
 	rm -rf .ruff_cache .pytest_cache
-	find src tests tools -name __pycache__ -type d -exec rm -rf {} +
+	find packages domains studio/src studio/tests tests -name __pycache__ -type d -exec rm -rf {} +

@@ -31,6 +31,7 @@ jobs:
     outputs:
       triton: ${{ steps.filter.outputs.triton }}
       studio: ${{ steps.filter.outputs.studio }}
+      studio-lock: ${{ steps.filter.outputs.studio-lock }}
     steps:
       - uses: actions/checkout@v7
       # The base images in triton/base build on a local machine, not here.
@@ -44,6 +45,10 @@ jobs:
               - '!triton/base/**'
             studio:
               - 'studio/**'
+            # studio shares the lock of the workspace.
+            studio-lock:
+              - 'uv.lock'
+              - 'pyproject.toml'
 
   app-image:
     runs-on: ubuntu-latest
@@ -56,6 +61,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: .
+          file: domains/cv/Dockerfile
           push: false
           provenance: false
           cache-from: type=gha,scope=app
@@ -89,10 +95,14 @@ jobs:
           provenance: false
 
   # The sync writes LightlyStudio tables, so its tests run against a real Postgres with
-  # pgvector, which they start with Docker.
+  # pgvector, which they start with Docker. A change to the lock changes their versions,
+  # so it runs them too. The image builds from upstream, and the lock does not touch it.
   studio-test:
     needs: changes
-    if: needs.changes.outputs.studio == 'true' || github.event_name == 'workflow_dispatch'
+    if: >-
+      needs.changes.outputs.studio == 'true'
+      || needs.changes.outputs.studio-lock == 'true'
+      || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read

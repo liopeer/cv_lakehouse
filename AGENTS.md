@@ -6,8 +6,45 @@ Copyright (c) 2025–2026 Lionel Peer
 
 ## Project
 
-This is a Dagster project. Assets, jobs, schedules and sensors go in `src/cv_lakehouse/defs/`.
-Dagster loads that folder automatically. Tests go in `tests/`.
+This is a uv workspace of Dagster projects. It has one lock file, `uv.lock`.
+
+| Directory | Content |
+| --- | --- |
+| `packages/lakehouse_core/` | The code that knows no domain: bronze, layer paths, manifests, `TableSpec`. |
+| `domains/cv/` | The computer vision domain, the package `lakehouse_cv`. One Dagster code location. |
+| `studio/` | LightlyStudio and its sync. A member of the workspace, with its own images. |
+| `triton/` | The embedding server. It is outside the workspace, and has its own lock. |
+| `docs/adr/` | The architecture decision records. |
+| `tests/` | The tests that check the whole repository. |
+
+Assets, jobs, schedules and sensors of a domain go in `domains/<name>/src/<package>/defs/`.
+Dagster loads that folder automatically. The tests of a package go in its own `tests/`.
+
+## Domains
+
+A domain is one package under `domains/`. It has these parts:
+
+| Part | Content |
+| --- | --- |
+| `contract/` | What each layer holds: schemas, `TableSpec`s, manifests, vocabularies, ids. |
+| `sources/` | One reader per publisher. |
+| `transforms/` | The code that fills silver and gold. |
+| `defs/` | The Dagster wiring. It decides nothing about the content. |
+
+Follow these import rules. `tests/test_import_direction.py` checks them.
+
+- Core imports no domain.
+- A domain imports itself and core. No domain imports another domain.
+- `contract/` imports only the standard library, pyarrow, pydantic, core and `contract/`.
+- Only `defs/` and `definitions.py` import `defs/`.
+
+Move code into core only when a second domain uses it with the same meaning.
+
+## ADRs
+
+Before you change a boundary between packages, layers or deployments, read `docs/adr/`.
+If the change makes a new decision, add a record in the same pull request. Do not
+edit an accepted record. Supersede it with a new one.
 
 ## Bronze
 
@@ -54,8 +91,8 @@ Use the Makefile. Do not call `uv run`, `ruff`, `pyrefly` or `pytest` directly.
 
 Run `make check` before you finish a task.
 
-`studio/` has its own environment. After a change under `studio/`, also run
-`make -C studio test`. It needs Docker, for a Postgres with pgvector.
+After a change under `studio/` or to `uv.lock`, also run `make -C studio test`. It
+needs Docker, for a Postgres with pgvector.
 
 ## Commits
 
@@ -90,8 +127,9 @@ takes the comment for a part of the header, and deletes it.
 
 ## Dependencies
 
-To add a dependency, run `uv add <package>`. To add a development dependency, run
-`uv add --dev <package>`. Both commands update `uv.lock`. Commit `uv.lock`.
+To add a dependency to a member, run `uv add --package <member> <package>`, such as
+`uv add --package lakehouse-cv duckdb`. To add a development dependency, run
+`uv add --dev <package>` at the root. Both commands update `uv.lock`. Commit `uv.lock`.
 
 Every Makefile target uses `--frozen`. If the lock file is out of date, the targets fail.
 Run `make lock` to update it.

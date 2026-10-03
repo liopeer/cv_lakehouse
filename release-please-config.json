@@ -57,7 +57,7 @@
   ],
   "packages": {
     ".": {
-      "release-type": "python",
+      "release-type": "simple",
       "package-name": "cv_lakehouse",
       "component": "cv_lakehouse",
       "include-component-in-tag": false,
@@ -69,8 +69,18 @@
       "extra-files": [
         {
           "type": "toml",
+          "path": "packages/lakehouse_core/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "domains/cv/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
           "path": "uv.lock",
-          "jsonpath": "$.package[?(@.name.value=='cv-lakehouse')].version"
+          "jsonpath": "$.package[?(@.name.value=='lakehouse-core' || @.name.value=='lakehouse-cv')].version"
         }
       ]
     },

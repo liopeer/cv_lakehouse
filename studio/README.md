@@ -138,5 +138,5 @@ make image   # build both images
 1. Clone the new tag, run `git apply patches/*.patch`, and fix what does not apply.
 2. Regenerate the patch with `git add -N . && git diff`.
 3. Set `LIGHTLY_STUDIO_REF` in the Dockerfile and the `lightly-studio` pin in
-   `pyproject.toml` to the new version. Run `make lock`.
+   `pyproject.toml` to the new version. Run `make lock` at the root of the repository.
 4. Run `make test`. The tests write the tables of the new version.

@@ -107,6 +107,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: .
+          file: domains/cv/Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE }}:${{ env.VERSION }}
