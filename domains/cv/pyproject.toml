@@ -1,0 +1,36 @@
+[project]
+name = "lakehouse-cv"
+requires-python = ">=3.12,<3.15"
+version = "0.2.0"
+description = "The computer vision domain of the lakehouse, built on Dagster."
+authors = [{ name = "Lionel Peer" }]
+license = "MIT"
+dependencies = [
+    "dagster==1.13.21",
+    "duckdb>=1.2.2,<1.6",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "labelformat>=0.1.17",
+    "lakehouse-core",
+    "pillow>=12.3.0",
+    "pyarrow>=17.0.0",
+    "pydantic-settings>=2.15.0",
+    "tritonclient[grpc]>=2.72.0",
+    "uvicorn>=0.52.4",
+]
+
+[tool.uv.sources]
+lakehouse-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "lakehouse_cv"
+# The name that the deployment registers. A Dagster instance keys the state of the
+# schedules and sensors by it.
+code_location_name = "cv_lakehouse"

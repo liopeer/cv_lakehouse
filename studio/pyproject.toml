@@ -19,19 +19,10 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    # Direct, so that uv routes them to the CPU index. Nothing here trains.
+    # Direct, so that uv routes them to the CPU index of the workspace root.
     "torch>=2.6.0",
     "torchvision>=0.20.0",
 ]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
-torchvision = [{ index = "pytorch-cpu" }]
 
 [build-system]
 requires = ["hatchling"]

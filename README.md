@@ -7,7 +7,9 @@ Copyright (c) 2025–2026 Lionel Peer
 [![build](https://github.com/liopeer/cv_lakehouse/actions/workflows/build.yml/badge.svg)](https://github.com/liopeer/cv_lakehouse/actions/workflows/build.yml)
 [![release](https://github.com/liopeer/cv_lakehouse/actions/workflows/release.yml/badge.svg)](https://github.com/liopeer/cv_lakehouse/actions/workflows/release.yml)
 
-A medallion lakehouse for computer vision datasets, built on Dagster.
+A medallion lakehouse on Dagster. Computer vision is its first domain, and each domain
+is one package with its own code location. See [docs/adr](docs/adr/README.md) for the
+decisions behind the layout.
 
 The first pipeline covers PII redaction: detecting human faces and vehicle licence
 plates, so that they can be blurred.
@@ -184,7 +186,7 @@ reused. A new model behind the same name is not detected: bump `SILVER_LOGIC_VER
 
 ### The class registry
 
-`CanonicalClass` in `src/cv_lakehouse/class_registry.py` holds the vocabulary that
+`CanonicalClass` in `domains/cv/src/lakehouse_cv/contract/class_registry.py` holds the vocabulary that
 silver writes. These are our classes, not any dataset's:
 
 | id | name |
@@ -335,12 +337,9 @@ $CV_LAKEHOUSE_ROOT/
     versions/<n>/images/<dataset>/<split>.parquet   one row per image
     versions/<n>/boxes/<dataset>/<split>.parquet    one row per box
     releases/<number>/               the frozen val and test files of one release
-  .studio/<name>.db            a LightlyStudio cache, safe to delete
 ```
 
 Only bronze holds pixels. Silver holds annotations, so it costs almost no disk.
-
-`.studio` is not a layer. See below.
 
 ## Curating gold in LightlyStudio
 
@@ -356,46 +355,6 @@ The loop, each step by hand:
 4. The sync sees the new gold version on its next run. The corrected boxes stay as the
    curator left them.
 5. When a round of corrections is done, materialize `gold/eval_release`.
-
-## Browsing silver in LightlyStudio
-
-```bash
-make studio DATASETS="wider_face pp4av"
-```
-
-That builds a LightlyStudio database from the Parquet and opens the GUI. Around 100k
-images and 1M boxes load in about seven seconds, because every row goes in through
-`INSERT ... SELECT ... FROM read_parquet(...)` that DuckDB runs server side. Nothing
-iterates a row in Python.
-
-The database is a cache, never an artifact of the lake. DuckDB gives it no migration path,
-it holds an exclusive write lock, and its storage format is tied to a DuckDB range, so
-Parquet stays the thing we keep and the database gets rebuilt. Delete
-`$CV_LAKEHOUSE_ROOT/.studio` whenever.
-
-Every id LightlyStudio needs is derived during the load rather than stored in silver: an
-md5 of `(dataset, split, file_name)` and of the box index on it. Keys are unique across
-datasets by construction, so loading several datasets into one database is a
-concatenation, and a reload is idempotent. `file_path_abs` is derived too, since an
-absolute path in silver would not survive a move to another machine. The same load will
-serve a training mix later, which is the other reason silver keeps no database of its
-own.
-
-Silver's embeddings load the same way, onto the sample of the image and the sample of
-the box. LightlyStudio therefore embeds nothing itself: the GUI's plot and its similarity
-search read what silver already wrote. A silver built with no Triton server loads too,
-without the plot.
-
-`tools/studio.py` is a script and not part of the package: browsing is neither a layer
-nor a step in producing one. `uv run` reads its dependencies from its own header, and it
-depends on the checkout beside it, so the Parquet paths, the manifest and the class
-registry it reads are the ones silver wrote. `cv_lakehouse` therefore depends on no GUI.
-
-LightlyStudio pulls torch, which is why the script routes torch and torchvision to the
-PyTorch CPU channel: nothing here trains or embeds, the Triton server in `triton/` holds
-the weights. On Linux the CPU channel removes 2.8 GB of wheels, the CUDA stack included,
-and the torch stack lands at 198 MB. The three are also in this project's `dev` group,
-for the test that loads silver through the script.
 
 ## Bronze
 
@@ -471,43 +430,46 @@ ops:
 
 ## Adding a dataset
 
-1. Write a source in `sources/` that inherits `BronzeSource`. It lists every file the
+1. Write a source in `domains/cv/src/lakehouse_cv/sources/` that inherits `BronzeSource`. It lists every file the
    dataset publishes in `published_files`, with a size and a checksum, reports its
    image root, and returns a `labelformat` reader over the raw labels. It holds no
    download code: bronze downloads, verifies and unpacks the files.
-2. Give it a `DatasetSpec` that maps its category names onto canonical class names.
+2. Give it a `DatasetSpec` (`contract/dataset_spec.py`) that maps its category names onto canonical class names.
 3. Register it in `sources/source_registry.py`. Its bronze and silver assets then
    appear on their own.
 
 If the dataset publishes something per box that labelformat cannot carry, also inherit
 `BoxAttributeSource`, implement `read_raw_images`, and add the `attr_*` columns to
-`silver_schema.ATTRIBUTE_COLUMNS`. A source without it is adapted from its labelformat
+`contract/silver_tables.ATTRIBUTE_COLUMNS`. A source without it is adapted from its labelformat
 reader and simply writes no attributes.
 
 ## Layout
 
 ```
-src/cv_lakehouse/
-  class_registry.py  the canonical classes every layer shares
-  settings.py        pydantic-settings, prefix CV_LAKEHOUSE_
-  normalization.py   normalise one dataset onto the canonical classes
-  correction_overlay.py  apply the corrections of the curators in silver
-  silver_schema.py   the Parquet schema silver writes, and the streaming writer
-  box_identity.py    the ids of an image and of a box
-  split_roles.py     the roles a split can have in gold
-  gold_schema.py     the Parquet schema gold writes
-  gold_build.py      build one gold version from the silver datasets on disk
-  gold_release.py    freeze the val and test rows of gold as a numbered release
+pyproject.toml       the uv workspace and the dg workspace, and the development tools
+uv.lock              one lock for every member
+packages/lakehouse_core/src/lakehouse_core/
+  published_files.py   download, verify and unpack the files a publisher distributes
+  published_source.py  the protocol between a source of a domain and bronze
+  bronze_asset.py      the bronze asset of any source: download or link, then verify
+  bronze_manifest.py   what bronze writes beside a dataset
+  lake_paths.py        the bronze, silver and gold directories under a root
+  lake_settings.py     the settings every domain shares
+  lake_resource.py     the Dagster resource with the lake root
+  manifest_files.py    write and read a manifest
+  table_spec.py        the name, layer, schema and key of a table
+  fingerprints.py      the digest behind the code versions
+domains/cv/src/lakehouse_cv/
+  contract/          what each layer holds: schemas, tables, manifests, classes, ids
+  sources/           one module per dataset, the registry, and the corrections export
+  transforms/        normalise, apply corrections, embed, write silver, build gold
   gold_api/          the HTTP API over gold
-  embeddings.py      the MobileCLIP client, and the embedding Parquet it writes
-  manifests.py       what each layer writes beside its output
-  sources/           one module per dataset, the source registry, and the
-                     downloader that fetches, verifies and unpacks bronze
   defs/              the Dagster assets and checks
-tests/
-tools/
-  studio.py          load silver into LightlyStudio. A uv script, not in the package
-triton/              the MobileCLIP server, vendored
+  settings.py        pydantic-settings, prefix CV_LAKEHOUSE_
+domains/cv/Dockerfile  the image of the CV code location
+docs/adr/            the architecture decision records
+tests/               the import rules between the packages
+triton/              the MobileCLIP server, vendored, with its own lock
 studio/              the LightlyStudio images: the server, and the sync from gold
 ```
 
