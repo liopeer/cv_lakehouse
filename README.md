@@ -228,7 +228,8 @@ Gold joins the silver datasets into one table set. A consumer reads gold and no 
   roles in `DatasetSpec.split_roles`.
 - Gold holds no flagged box. A crowd box, a depiction and a region the annotators
   rejected stay in silver.
-- `image_path` is relative to the lake root, so gold names a pixel on any machine.
+- `image_path` is relative to the lake root, so gold names a pixel on any machine. A pixel
+  of a copy that bronze links from outside the lake keeps its absolute path or URL.
 - `changed_at` is the build that last changed the row. A row that a rebuild leaves
   equal keeps its time.
 - Gold copies no embedding. The vectors stay in the silver files.

@@ -105,12 +105,16 @@ starts a new chain, and the lake then rejects it. Back up Postgres.
 | `CV_LAKEHOUSE_STUDIO_EXPORT_PORT` | sync | the port of the export. 8002 by default |
 
 Gold names a pixel relative to the lake root. The sync puts `IMAGE_BASE` in front, and
-LightlyStudio reads the result through fsspec:
+LightlyStudio reads the result through fsspec. A pixel of a copy that bronze links from
+outside the lake has an absolute path or a URL in gold, and the sync keeps it.
 
 - A directory: mount the lake read only at that path in the server container. Also mount
-  the target of a bronze directory that is a symlink.
-- `s3://bucket/prefix`, `gs://...` or `az://...`: give the server the credentials, such
-  as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_ENDPOINT_URL`.
+  every linked copy outside of it.
+- `s3://bucket/prefix`, `gs://...` or `az://...`: give the server read access through the
+  environment, such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
+  `AWS_ENDPOINT_URL`. With a custom endpoint, such as SeaweedFS, s3fs addresses the
+  bucket in the path, so no bucket subdomain is needed. The image installs the fsspec
+  backends of S3, GCS and Azure.
 
 A sync run with a new `IMAGE_BASE` moves every path.
 

@@ -213,13 +213,20 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         """,
     ),
     (
-        # The path follows the image base, so a lake that moves needs no reload.
+        # The path follows the image base, so a lake that moves needs no reload. A
+        # linked copy outside the lake has an absolute path or a URL in gold, and keeps
+        # it.
         "images",
         """
         insert into image
             (file_name, width, height, file_path_abs, sample_id, created_at, updated_at)
-        select file_name, width, height, :image_base || '/' || image_path, image_id,
-               :now, :now
+        select file_name, width, height,
+               case
+                   when image_path like '/%' or image_path ~ '^[a-z][a-z0-9+.-]*://'
+                       then image_path
+                   else :image_base || '/' || image_path
+               end,
+               image_id, :now, :now
         from stage_image
         on conflict (sample_id) do update
             set file_path_abs = excluded.file_path_abs, updated_at = excluded.updated_at

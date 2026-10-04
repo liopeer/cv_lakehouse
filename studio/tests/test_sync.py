@@ -225,6 +225,22 @@ def test_a_new_image_base_moves_every_path() -> None:
     ]
 
 
+def test_a_path_of_a_linked_copy_keeps_its_location() -> None:
+    client = FakeGoldClient(
+        image_paths=(
+            "s3://datasets/faces/train/a.jpg",
+            "/mnt/datasets/faces/validation/b.jpg",
+        )
+    )
+
+    _sync(client=client, image_base="s3://bucket/lake")
+
+    assert sorted(_fetch("select file_path_abs from image")) == [
+        ("/mnt/datasets/faces/validation/b.jpg",),
+        ("s3://datasets/faces/train/a.jpg",),
+    ]
+
+
 def test_a_gold_with_no_embedding_model_loads_no_vector() -> None:
     _sync(FakeGoldClient(embedding_model=None))
     assert _fetch("select count(*) from sample_embedding") == [(0,)]

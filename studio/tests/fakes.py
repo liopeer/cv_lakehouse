@@ -75,6 +75,11 @@ class FakeGoldClient(GoldClient):
 
     boxes: list[dict] = field(default_factory=_make_default_boxes)
     embedding_model: str | None = "mobileclip_s0"
+    # Relative to the lake root, unless bronze links a copy outside of it.
+    image_paths: tuple[str, str] = (
+        "bronze/faces/train/a.jpg",
+        "bronze/faces/validation/b.jpg",
+    )
     version: int = 1
     requested_changed_since: list[datetime | None] = field(default_factory=list)
 
@@ -112,7 +117,7 @@ class FakeGoldClient(GoldClient):
                         "file_name": "a.jpg",
                         "width": 100,
                         "height": 80,
-                        "image_path": "bronze/faces/train/a.jpg",
+                        "image_path": self.image_paths[0],
                         "role": "train",
                         "split": "train",
                     },
@@ -121,7 +126,7 @@ class FakeGoldClient(GoldClient):
                         "file_name": "b.jpg",
                         "width": 64,
                         "height": 64,
-                        "image_path": "bronze/faces/validation/b.jpg",
+                        "image_path": self.image_paths[1],
                         "role": "val",
                         "split": "validation",
                     },
