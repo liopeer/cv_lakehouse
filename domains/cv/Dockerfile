@@ -7,27 +7,34 @@
 # image carries the virtualenv and the source, but not uv or its cache. The build
 # context is the root of the repository, because the lock is the lock of the workspace.
 
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS requirements
+
+# The pins of the dependencies of lakehouse-cv and of core, from the lock file alone. uv
+# reads every member to resolve the workspace, studio included. The workspace packages
+# stay out, so a release, which only bumps their versions, leaves this file as it was,
+# and the install below stays cached.
+RUN --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=packages/lakehouse_core/pyproject.toml,target=packages/lakehouse_core/pyproject.toml \
+    --mount=type=bind,source=domains/cv/pyproject.toml,target=domains/cv/pyproject.toml \
+    --mount=type=bind,source=studio/pyproject.toml,target=studio/pyproject.toml \
+    uv export --frozen --package lakehouse-cv --no-emit-workspace --no-dev \
+      --no-header --output-file /requirements.txt
+
+
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
 # The virtualenv lives outside the project, so the runtime stage copies it as a layer of its
 # own. A source change then leaves that layer, and its digest, as it was.
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    UV_PYTHON_DOWNLOADS=never \
-    UV_PROJECT_ENVIRONMENT=/opt/venv
+    UV_PYTHON_DOWNLOADS=never
 
-WORKDIR /cv_lakehouse
-
-# The dependencies of lakehouse-cv and of core, from the lock file alone. This layer
-# rebuilds only when a pyproject.toml or uv.lock changes. uv reads every member to
-# resolve the workspace, studio included, and installs none of them.
+# The layer is keyed on the content of the pins, not on the files they came from.
+COPY --from=requirements /requirements.txt /requirements.txt
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=packages/lakehouse_core/pyproject.toml,target=packages/lakehouse_core/pyproject.toml \
-    --mount=type=bind,source=domains/cv/pyproject.toml,target=domains/cv/pyproject.toml \
-    --mount=type=bind,source=studio/pyproject.toml,target=studio/pyproject.toml \
-    uv sync --frozen --package lakehouse-cv --no-install-workspace --no-dev
+    uv venv /opt/venv \
+ && uv pip install --python /opt/venv/bin/python --require-hashes -r /requirements.txt
 
 
 FROM python:3.12-slim-bookworm AS runtime

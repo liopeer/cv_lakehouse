@@ -224,4 +224,4 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=MIT
           provenance: false
-          cache-from: type=gha,scope=studio
+          cache-from: type=gha,scope=studio-${{ matrix.target }}
