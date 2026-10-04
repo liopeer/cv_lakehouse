@@ -43,3 +43,4 @@ An ADR records one decision about the architecture, and the reason for it.
 | [0008](0008-bronze-keeps-the-published-bytes.md) | Bronze keeps the bytes as the publisher distributes them |
 | [0009](0009-corrections-are-bronze-snapshots.md) | Corrections are bronze snapshots |
 | [0010](0010-eval-splits-are-numbered-releases.md) | Eval splits are frozen as numbered releases |
+| [0011](0011-the-lake-is-a-url.md) | The lake root is a URL, read through fsspec |
