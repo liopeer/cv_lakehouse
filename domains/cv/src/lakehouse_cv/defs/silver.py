@@ -98,10 +98,10 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
     def _silver(
         context: dg.AssetExecutionContext, lake: CvLakeResource
     ) -> dg.MaterializeResult:
-        bronze_dir = lake.paths.bronze_dir(name)
         bronze = read_manifest(
-            path=bronze_dir / BRONZE_MANIFEST, model=CvBronzeManifest
+            path=lake.paths.bronze_dir(name) / BRONZE_MANIFEST, model=CvBronzeManifest
         )
+        bronze_dir = lake.store.resolve(bronze.path)
         silver_dir = lake.paths.silver_dir(name)
         corrections = read_corrections_manifest(paths=lake.paths, name=name)
         snapshot = corrections.snapshots[-1] if corrections.snapshots else None

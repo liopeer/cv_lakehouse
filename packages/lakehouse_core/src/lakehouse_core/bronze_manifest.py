@@ -28,6 +28,8 @@ class BronzeManifest(BaseModel):
     homepage: str
     license: str
     commercial_use: bool
+    # Where the copy is: a key under the lake root for a download, and the location of
+    # the copy for a link. Read bronze from here, not from the bronze directory.
     path: str
     # Every file the publisher publishes, with its URL and its checksum. A linked copy
     # lists them too: they define what a complete copy is.

@@ -89,8 +89,8 @@ def test_a_link_writes_the_manifest_of_the_domain(tmp_path: Path) -> None:
     result = _materialize(lake=lake, source_dir=copy)
 
     bronze_dir = lake.paths.bronze_dir("rows")
-    assert bronze_dir.resolve() == copy
     manifest = read_manifest(path=bronze_dir / BRONZE_MANIFEST, model=_RowsManifest)
+    assert manifest.path == str(copy)
     assert manifest.mode == BronzeMode.LINK
     assert manifest.row_files == ["rows.txt"]
     assert [file.path for file in manifest.published_files] == ["rows.txt"]

@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Build silver, gold and the gold API on a lake that is not on a local disk.
+"""Build every layer and the gold API on a lake that is not on a local disk.
 
-Bronze still writes only to a local disk, so each test links bronze into a local lake
-and uploads it. Everything above bronze then runs on `memory://`, and on S3 against a
-moto server, through DuckDB's httpfs.
+Bronze links copies that sit beside the lake, in the same store. Every layer then runs
+on `memory://`, and on S3 against a moto server, with DuckDB on httpfs.
 """
 
+import contextlib
 import json
 import os
 import socket
@@ -34,21 +34,33 @@ BUCKET = "lake"
 
 @pytest.fixture(scope="module")
 def s3_endpoint() -> Iterator[str]:
+    """A moto server, or the S3 at LAKEHOUSE_TEST_S3_ENDPOINT, such as SeaweedFS."""
+    endpoint = os.environ.get("LAKEHOUSE_TEST_S3_ENDPOINT")
+    if endpoint is not None:
+        _create_bucket(endpoint)
+        yield endpoint
+        return
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     server = ThreadedMotoServer(ip_address="127.0.0.1", port=port)
     server.start()
     endpoint = f"http://127.0.0.1:{port}"
-    boto3.client(
+    _create_bucket(endpoint)
+    yield endpoint
+    server.stop()
+
+
+def _create_bucket(endpoint: str) -> None:
+    client = boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id="key",
         aws_secret_access_key="secret",
         region_name="us-east-1",
-    ).create_bucket(Bucket=BUCKET)
-    yield endpoint
-    server.stop()
+    )
+    with contextlib.suppress(client.exceptions.BucketAlreadyOwnedByYou):
+        client.create_bucket(Bucket=BUCKET)
 
 
 @pytest.fixture(params=["memory", "s3"])
@@ -56,13 +68,13 @@ def remote_lake(request: pytest.FixtureRequest) -> CvLakeResource:
     prefix = uuid.uuid4().hex
     if request.param == "memory":
         return CvLakeResource(
-            root=f"memory://{prefix}",
+            root=f"memory://{prefix}/lake",
             download_workers=2,
             request_timeout_seconds=5.0,
         )
     endpoint = request.getfixturevalue("s3_endpoint")
     return CvLakeResource(
-        root=f"s3://{BUCKET}/{prefix}",
+        root=f"s3://{BUCKET}/{prefix}/lake",
         storage_options=json.dumps(
             {"key": "key", "secret": "secret", "endpoint_url": endpoint}
         ),
@@ -77,7 +89,12 @@ def test_silver_and_gold_build_on_a_remote_lake(
     bronze_sources: dict[str, UPath],
 ) -> None:
     materialize_bronze_links(lake=lake, sources=bronze_sources)
-    _upload_tree(source=Path(lake.root), target=remote_lake.store.root)
+    remote_sources = {
+        name: remote_lake.store.root.parent / "external" / name for name in DATASETS
+    }
+    for name, copy_dir in remote_sources.items():
+        _upload_tree(source=Path(str(bronze_sources[name])), target=copy_dir)
+    materialize_bronze_links(lake=remote_lake, sources=remote_sources)
 
     for run_lake in (lake, remote_lake):
         materialize_assets(
@@ -100,7 +117,11 @@ def test_silver_and_gold_build_on_a_remote_lake(
         bronze = CvBronzeManifest.model_validate_json(
             (remote_lake.paths.bronze_dir(name) / "_bronze.json").read_text()
         )
-        assert all(not root.startswith("/") for root in bronze.image_roots.values())
+        assert bronze.path == str(remote_sources[name])
+        for root in bronze.image_roots.values():
+            assert root.startswith(str(remote_sources[name]))
+            # SeaweedFS refuses a key with a "." segment, and moto takes it.
+            assert "/./" not in f"{root}/" and not root.endswith("/.")
 
     local_boxes = _read_boxes(lake)
     assert local_boxes
@@ -121,13 +142,15 @@ def _read_boxes(lake: CvLakeResource) -> list[dict]:
 
 
 def _upload_tree(source: Path, target: UPath) -> None:
-    """Copy a local lake, through its bronze symlinks, into a remote root."""
-    for directory, _, files in os.walk(source, followlinks=True):
+    """Upload a tree. An object store has no empty directory, so one gets a file."""
+    for directory, subdirectories, files in os.walk(source):
+        target_dir = target.joinpath(*Path(directory).relative_to(source).parts)
+        if not files and not subdirectories:
+            (target_dir / ".keep").write_bytes(b"")
         for file_name in files:
-            path = Path(directory) / file_name
-            target_path = target / path.relative_to(source).as_posix()
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(path.read_bytes())
+            (target_dir / file_name).write_bytes(
+                (Path(directory) / file_name).read_bytes()
+            )
 
 
 def test_a_location_is_a_key_under_the_root(remote_lake: CvLakeResource) -> None:
