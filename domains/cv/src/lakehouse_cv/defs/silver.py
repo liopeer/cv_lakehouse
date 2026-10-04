@@ -21,7 +21,7 @@ from upath import UPath
 
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST
 from lakehouse_core.fingerprints import sha256_fingerprint
-from lakehouse_core.lake_store import LakeStore, is_local
+from lakehouse_core.lake_store import LakeStore, build_reader_locator
 from lakehouse_core.manifest_files import read_manifest, write_manifest
 from lakehouse_cv.contract.class_registry import (
     CanonicalClass,
@@ -60,6 +60,8 @@ from lakehouse_cv.transforms.silver_writer import write_split
 # Clipping writes a coordinate back as a float, so a box that ends exactly on the edge
 # can land a hair either side of it. Only a real overflow should fail the check.
 EDGE_TOLERANCE_PIXELS = 1e-6
+# Long enough for a request that waits in the queue of Triton.
+PRESIGNED_URL_SECONDS = 3600
 
 
 # Bump this when the normalisation rules change, such as clipping or the drop policy.
@@ -249,17 +251,16 @@ def _embed_split(
     Return the image count, the crop count, and how many vectors of the two came from
     the run before.
     """
-    root = store.resolve(image_root)
-    if not is_local(root):
-        raise NotImplementedError(
-            f"Triton reads images only from a local disk, and {root} is not on one."
-        )
     target = {
         "embedder": embedder,
         "silver_dir": silver_dir,
         "dataset": dataset,
         "split": split,
-        "image_root": str(root),
+        # A lake on an object store reaches Triton as presigned URLs, made batch by
+        # batch, just before each request.
+        "locate_image": build_reader_locator(
+            store.resolve(image_root), expires_seconds=PRESIGNED_URL_SECONDS
+        ),
     }
     if previous is None:
         return write_image_embeddings(**target), write_crop_embeddings(**target), 0

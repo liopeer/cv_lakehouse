@@ -160,14 +160,14 @@ def test_writing_embeddings_matches_the_schema_and_the_row_order(tmp_path) -> No
         silver_dir=tmp_path,
         dataset="d",
         split="train",
-        image_root="/lake/images/",
+        locate_image=lambda name: f"/lake/images/{name}",
     )
     crops = write_crop_embeddings(
         embedder=embedder,
         silver_dir=tmp_path,
         dataset="d",
         split="train",
-        image_root="/lake/images/",
+        locate_image=lambda name: f"/lake/images/{name}",
     )
 
     assert (images, crops) == (2, 2)
@@ -190,14 +190,14 @@ def test_writing_embeddings_sends_absolute_paths_and_rounded_boxes(tmp_path) -> 
         silver_dir=tmp_path,
         dataset="d",
         split="train",
-        image_root="/lake/images/",
+        locate_image=lambda name: f"/lake/images/{name}",
     )
     write_crop_embeddings(
         embedder=embedder,
         silver_dir=tmp_path,
         dataset="d",
         split="train",
-        image_root="/lake/images/",
+        locate_image=lambda name: f"/lake/images/{name}",
     )
 
     assert embedder.paths == ["/lake/images/a.jpg", "/lake/images/b.jpg"]

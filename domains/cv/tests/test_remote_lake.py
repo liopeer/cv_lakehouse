@@ -17,6 +17,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import boto3
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from moto.server import ThreadedMotoServer
@@ -27,6 +28,7 @@ from lakehouse_cv.defs import gold as gold_defs
 from lakehouse_cv.defs import silver as silver_defs
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.gold_api.app import create_app
+from tests.fakes import FakeEmbedder
 from tests.lake_runs import DATASETS, materialize_assets, materialize_bronze_links
 
 BUCKET = "lake"
@@ -165,3 +167,41 @@ def test_a_location_outside_the_root_stays_whole(
 ) -> None:
     store = remote_lake.store
     assert store.location(store.resolve(str(tmp_path))) == str(tmp_path)
+
+
+def test_silver_sends_triton_presigned_urls_on_s3(
+    s3_endpoint: str,
+    bronze_sources: dict[str, UPath],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Triton holds no credentials, so a URL from silver must open as it is."""
+    embedder = FakeEmbedder()
+    monkeypatch.setattr(
+        target=silver_defs, name="TritonEmbedder", value=lambda url: embedder
+    )
+    prefix = uuid.uuid4().hex
+    lake = CvLakeResource(
+        root=f"s3://{BUCKET}/{prefix}/lake",
+        storage_options=json.dumps(
+            {"key": "key", "secret": "secret", "endpoint_url": s3_endpoint}
+        ),
+        download_workers=2,
+        request_timeout_seconds=5.0,
+        triton_url="fake:0",
+    )
+    copies = {name: lake.store.root.parent / "external" / name for name in DATASETS}
+    for name, copy_dir in copies.items():
+        _upload_tree(source=Path(str(bronze_sources[name])), target=copy_dir)
+    materialize_bronze_links(lake=lake, sources=copies)
+
+    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("wider_face")])
+
+    urls = [*embedder.paths, *(crop.path for crop in embedder.crops)]
+    assert embedder.paths and embedder.crops
+    assert all(url.startswith(f"{s3_endpoint}/{BUCKET}/{prefix}/") for url in urls)
+    assert all("Signature=" in url for url in urls)
+    first = embedder.paths[0]
+    key = first.split("?")[0].removeprefix(f"{s3_endpoint}/")
+    response = httpx.get(first)
+    assert response.status_code == 200
+    assert response.content == lake.store.resolve(f"s3://{key}").read_bytes()
