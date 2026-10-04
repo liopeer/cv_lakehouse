@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0](https://github.com/liopeer/cv_lakehouse/compare/v0.3.0...v0.4.0) (2026-10-04)
+
+
+### Features
+
+* read and write the lake through fsspec, on any root ([#30](https://github.com/liopeer/cv_lakehouse/issues/30)) ([b481b92](https://github.com/liopeer/cv_lakehouse/commit/b481b921e97e2c3f4277ab2a0171adb3c252277d))
+* send triton presigned urls for a lake on an object store ([#35](https://github.com/liopeer/cv_lakehouse/issues/35)) ([d6cbd9d](https://github.com/liopeer/cv_lakehouse/commit/d6cbd9dae044470f36b34d52f8eaf7cfaa059a2f))
+* stream bronze into any store, and resume downloads on s3 ([#32](https://github.com/liopeer/cv_lakehouse/issues/32)) ([235cb4f](https://github.com/liopeer/cv_lakehouse/commit/235cb4f5f1af1e1c56e7317b2cc18717ed7f68ea))
+* **studio:** keep the path of a linked copy outside the lake ([#36](https://github.com/liopeer/cv_lakehouse/issues/36)) ([6b03b25](https://github.com/liopeer/cv_lakehouse/commit/6b03b257c968061fc532a659c9454845617ccc99))
+
 ## [0.3.0](https://github.com/liopeer/cv_lakehouse/compare/v0.2.0...v0.3.0) (2026-10-04)
 
 
