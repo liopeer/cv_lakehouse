@@ -99,7 +99,7 @@ class BronzeSource(PublishedSource[CvBronzeManifest], Protocol):
             splits=list(splits),
             # Under the location of bronze, so the roots move with the lake.
             image_roots={
-                split: posixpath.join(
+                split: _join_location(
                     base.path,
                     self.image_root(bronze_dir=bronze_dir, split=split)
                     .relative_to(bronze_dir)
@@ -108,6 +108,11 @@ class BronzeSource(PublishedSource[CvBronzeManifest], Protocol):
                 for split in splits
             },
         )
+
+
+def _join_location(location: str, relative: str) -> str:
+    # An image root that is bronze itself is ".". S3 refuses a key with "/./" in it.
+    return location if relative == "." else posixpath.join(location, relative)
 
 
 def detect_materialized_splits(

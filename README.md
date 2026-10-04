@@ -327,12 +327,20 @@ export CV_LAKEHOUSE_STORAGE_OPTIONS='{"key": "...", "secret": "...", "endpoint_u
 root. DuckDB reads S3 with its httpfs extension, from the same options. A manifest
 stores every location relative to the root, so the lake moves as one tree.
 
-Silver, gold, their checks and the gold API run on any root. Bronze downloads and
-Triton read images only on a local root for now.
+Every layer runs on any root. Triton reads images only on a local root for now.
+
+Bronze stages nothing on local disk. On S3 a download is a multipart upload, and a run
+that dies resumes after the last part that S3 holds. On another object store a download
+that dies starts again. An archive unpacks from the store into the store, member by
+member. A linked copy stays where it is, local or remote, and the manifest records its
+location: link one with `source_dir`, such as `s3://datasets/coco2017`.
+
+Set `LAKEHOUSE_TEST_S3_ENDPOINT` to run the S3 tests against a real S3, such as
+SeaweedFS, instead of moto.
 
 ```
 $CV_LAKEHOUSE_ROOT/
-  bronze/<dataset>/            a manual download, or a symlink to a complete copy
+  bronze/<dataset>/            a manual download, or only the manifest of a linked copy
     _bronze.json                 every published file, with its URL and checksum
   bronze/<dataset>_corrections/  the corrections that curators made in LightlyStudio
     _corrections.json            every snapshot, with its checksum

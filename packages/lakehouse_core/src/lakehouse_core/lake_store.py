@@ -98,13 +98,6 @@ def is_local(path: UPath) -> bool:
     return isinstance(path, pathlib.Path)
 
 
-def require_local(path: UPath, purpose: str) -> pathlib.Path:
-    """Return a local path as a `pathlib.Path`, for code that needs a local disk."""
-    if not is_local(path):
-        raise NotImplementedError(f"{purpose} needs a local disk, and {path} is not.")
-    return pathlib.Path(str(path))
-
-
 def arrow_location(path: UPath) -> tuple[str, pafs.FileSystem | None]:
     """Return what pyarrow takes as `where` and `filesystem` for a path."""
     if is_local(path):

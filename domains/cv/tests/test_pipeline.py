@@ -43,8 +43,12 @@ def test_bronze_links_instead_of_downloading(
 ) -> None:
     materialize_bronze_links(lake=lake, sources=bronze_sources)
     for name in DATASETS:
-        assert lake.paths.bronze_dir(name).is_symlink()
-        assert lake.paths.bronze_dir(name).resolve() == bronze_sources[name].resolve()
+        bronze_dir = lake.paths.bronze_dir(name)
+        manifest = read_manifest(
+            path=bronze_dir / BRONZE_MANIFEST, model=CvBronzeManifest
+        )
+        assert manifest.path == str(bronze_sources[name])
+        assert [path.name for path in bronze_dir.iterdir()] == [BRONZE_MANIFEST]
 
 
 def test_bronze_reports_only_the_splits_on_disk(tmp_path: Path) -> None:
