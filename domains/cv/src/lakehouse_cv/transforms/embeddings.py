@@ -14,7 +14,7 @@ speed away.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Protocol, Self
 
@@ -120,8 +120,8 @@ class TritonEmbedder(Embedder):
     def embed_images(self, paths: Sequence[str]) -> NDArray[np.float32]:
         """Embed whole images, in the order given.
 
-        The path is resolved by the server, so it has to name the same file inside the
-        container.
+        A path is a local path, which names the same file inside the container of the
+        server, or an http URL, such as a presigned one, which the server fetches.
         """
         return _concatenate_embeddings(
             self._infer(
@@ -257,14 +257,13 @@ def write_image_embeddings(
     silver_dir: UPath,
     dataset: str,
     split: str,
-    image_root: str,
+    locate_image: Callable[[str], str],
 ) -> int:
     """Embed every image of one split, and write the Parquet. Return the row count.
 
     The rows keep the order of the images file, so a reader joins the two on the key
     and never has to sort.
     """
-    root = image_root.rstrip("/")
     writer = _EmbeddingWriter(
         path=embeddings_file(silver_dir=silver_dir, split=split),
         schema=EMBEDDING_SCHEMA,
@@ -279,7 +278,7 @@ def write_image_embeddings(
             writer.add(
                 file_names=names,
                 box_keys=None,
-                vectors=embedder.embed_images([f"{root}/{name}" for name in names]),
+                vectors=embedder.embed_images([locate_image(name) for name in names]),
             )
     finally:
         writer.close()
@@ -292,13 +291,12 @@ def write_crop_embeddings(
     silver_dir: UPath,
     dataset: str,
     split: str,
-    image_root: str,
+    locate_image: Callable[[str], str],
 ) -> int:
     """Embed every box of one split as a crop, and write the Parquet.
 
     Flagged boxes are embedded too. Silver keeps them, and its consumer decides.
     """
-    root = image_root.rstrip("/")
     columns = ["file_name", "box_id", "box_index", "x", "y", "w", "h"]
     writer = _EmbeddingWriter(
         path=crop_embeddings_file(silver_dir=silver_dir, split=split),
@@ -314,7 +312,9 @@ def write_crop_embeddings(
             writer.add(
                 file_names=rows["file_name"],
                 box_keys=BoxKeys(ids=rows["box_id"], indices=rows["box_index"]),
-                vectors=embedder.embed_crops(_build_crops(root=root, rows=rows)),
+                vectors=embedder.embed_crops(
+                    _build_crops(locate_image=locate_image, rows=rows)
+                ),
             )
     finally:
         writer.close()
@@ -336,7 +336,7 @@ def reuse_or_embed_images(
     silver_dir: UPath,
     dataset: str,
     split: str,
-    image_root: str,
+    locate_image: Callable[[str], str],
     previous: PreviousSplit,
 ) -> tuple[int, int]:
     """Write the image vectors, and embed only an image that had none.
@@ -344,7 +344,6 @@ def reuse_or_embed_images(
     Bronze pins the pixels, so a vector of the run before is still the vector of its
     image. Return the row count, and how many of the rows were reused.
     """
-    root = image_root.rstrip("/")
     target = embeddings_file(silver_dir=silver_dir, split=split)
     fresh = target.with_name(target.name + ".fresh")
     parameters = {
@@ -363,7 +362,9 @@ def reuse_or_embed_images(
                 writer.add(
                     file_names=names,
                     box_keys=None,
-                    vectors=embedder.embed_images([f"{root}/{name}" for name in names]),
+                    vectors=embedder.embed_images(
+                        [locate_image(name) for name in names]
+                    ),
                 )
         finally:
             writer.close()
@@ -385,7 +386,7 @@ def reuse_or_embed_crops(
     silver_dir: UPath,
     dataset: str,
     split: str,
-    image_root: str,
+    locate_image: Callable[[str], str],
     previous: PreviousSplit,
 ) -> tuple[int, int]:
     """Write the crop vectors, and embed only a box that is new or that moved.
@@ -393,7 +394,6 @@ def reuse_or_embed_crops(
     A box keeps its vector when its four coordinates are equal to the run before. A
     relabelled box is such a box. Return the row count, and how many were reused.
     """
-    root = image_root.rstrip("/")
     target = crop_embeddings_file(silver_dir=silver_dir, split=split)
     fresh = target.with_name(target.name + ".fresh")
     parameters = {
@@ -413,7 +413,9 @@ def reuse_or_embed_crops(
                 writer.add(
                     file_names=rows["file_name"],
                     box_keys=BoxKeys(ids=rows["box_id"], indices=rows["box_index"]),
-                    vectors=embedder.embed_crops(_build_crops(root=root, rows=rows)),
+                    vectors=embedder.embed_crops(
+                        _build_crops(locate_image=locate_image, rows=rows)
+                    ),
                 )
         finally:
             writer.close()
@@ -492,9 +494,11 @@ def _write_query_rows(
     return count
 
 
-def _build_crops(root: str, rows: dict[str, list]) -> list[Crop]:
+def _build_crops(
+    locate_image: Callable[[str], str], rows: dict[str, list]
+) -> list[Crop]:
     return [
-        Crop.rounded_to_pixels(path=f"{root}/{name}", x=x, y=y, w=w, h=h)
+        Crop.rounded_to_pixels(path=locate_image(name), x=x, y=y, w=w, h=h)
         for name, x, y, w, h in zip(
             rows["file_name"], rows["x"], rows["y"], rows["w"], rows["h"], strict=True
         )

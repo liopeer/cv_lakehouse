@@ -327,7 +327,9 @@ export CV_LAKEHOUSE_STORAGE_OPTIONS='{"key": "...", "secret": "...", "endpoint_u
 root. DuckDB reads S3 with its httpfs extension, from the same options. A manifest
 stores every location relative to the root, so the lake moves as one tree.
 
-Every layer runs on any root. Triton reads images only on a local root for now.
+Every layer runs on any root. On a local root, silver sends Triton image paths, and the
+container mounts the lake. On an object store, silver sends presigned URLs, valid for an
+hour, so Triton needs no mount and no credentials. That needs Triton 0.3.0 or newer.
 
 Bronze stages nothing on local disk. On S3 a download is a multipart upload, and a run
 that dies resumes after the last part that S3 holds. On another object store a download

@@ -12,7 +12,7 @@ on it.
 
 import os
 import pathlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlparse
@@ -83,6 +83,20 @@ def _duckdb_config() -> dict[str, bool | float | int | list[str] | str]:
     # the user that it runs as.
     directory = os.environ.get("DUCKDB_EXTENSION_DIRECTORY")
     return {} if directory is None else {"extension_directory": directory}
+
+
+def build_reader_locator(root: UPath, *, expires_seconds: int) -> Callable[[str], str]:
+    """Map a name under `root` to what a server with no credentials can read.
+
+    That is the local path for a local root, and a presigned URL for a remote one. The
+    signature is computed locally, with no request to the store.
+    """
+    if is_local(root):
+        base = str(root).rstrip("/")
+        return lambda name: f"{base}/{name}"
+    filesystem = root.fs
+    base = root.path.rstrip("/")
+    return lambda name: filesystem.sign(f"{base}/{name}", expiration=expires_seconds)
 
 
 def to_upath(*, location: str, storage_options: Mapping[str, Any]) -> UPath:
