@@ -60,6 +60,8 @@ USER 10001
 
 # 4000 is the Dagster code server. 8000 is the gold API, which the same image serves
 # with `uvicorn --factory lakehouse_cv.gold_api.app:create_app_from_env --host 0.0.0.0`.
-EXPOSE 4000 8000
+# 3000 is the webserver. The webserver and the daemon of a deployment run this image too,
+# with `dagster-webserver` and `dagster-daemon run`.
+EXPOSE 3000 4000 8000
 
 CMD ["dagster", "code-server", "start", "-h", "0.0.0.0", "-p", "4000", "-m", "lakehouse_cv.definitions", "--location-name", "cv_lakehouse"]
