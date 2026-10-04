@@ -10,7 +10,6 @@
 from datetime import UTC, datetime
 
 import dagster as dg
-import duckdb
 
 from lakehouse_core.fingerprints import sha256_fingerprint
 from lakehouse_cv.defs.resources import CvLakeResource
@@ -44,6 +43,7 @@ def build_gold_asset() -> dg.AssetsDefinition:
         context: dg.AssetExecutionContext, lake: CvLakeResource
     ) -> dg.MaterializeResult:
         build = build_gold_version(
+            store=lake.store,
             paths=lake.paths,
             specs=specs,
             code_version=code_version,
@@ -78,7 +78,7 @@ def build_gold_checks() -> list[dg.AssetChecksDefinition]:
         if manifest is None:
             return dg.AssetCheckResult(passed=False, metadata={"problem": "no gold"})
         version_dir = lake.paths.gold_version_dir(manifest.version)
-        with duckdb.connect() as connection:
+        with lake.store.duckdb() as connection:
             problems = connection.execute(
                 query=_KEY_PROBLEM_QUERY,
                 parameters={

@@ -5,6 +5,7 @@
 from pathlib import Path
 
 import pytest
+from upath import UPath
 
 from lakehouse_cv.defs import silver as silver_defs
 from lakehouse_cv.defs.resources import CvLakeResource
@@ -36,5 +37,5 @@ def embedding_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CvLakeRes
 
 
 @pytest.fixture
-def bronze_sources(tmp_path: Path) -> dict[str, Path]:
+def bronze_sources(tmp_path: Path) -> dict[str, UPath]:
     return make_all(tmp_path / "external")

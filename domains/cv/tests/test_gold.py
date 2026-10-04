@@ -44,7 +44,11 @@ def silver_lake(
 
 def _build(lake: CvLakeResource, built_at: datetime) -> int:
     build = build_gold_version(
-        paths=lake.paths, specs=SPECS, code_version="test", built_at=built_at
+        store=lake.store,
+        paths=lake.paths,
+        specs=SPECS,
+        code_version="test",
+        built_at=built_at,
     )
     return build.manifest.version
 
@@ -183,7 +187,11 @@ def test_gold_leaves_out_a_dataset_with_no_silver(
     materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("pp4av")])
 
     build = build_gold_version(
-        paths=lake.paths, specs=SPECS, code_version="test", built_at=FIRST_BUILD
+        store=lake.store,
+        paths=lake.paths,
+        specs=SPECS,
+        code_version="test",
+        built_at=FIRST_BUILD,
     )
 
     assert [dataset.dataset for dataset in build.manifest.datasets] == ["pp4av"]
@@ -194,5 +202,9 @@ def test_gold_leaves_out_a_dataset_with_no_silver(
 def test_gold_fails_with_no_silver_at_all(lake: CvLakeResource) -> None:
     with pytest.raises(expected_exception=RuntimeError, match="No silver"):
         build_gold_version(
-            paths=lake.paths, specs=SPECS, code_version="test", built_at=FIRST_BUILD
+            store=lake.store,
+            paths=lake.paths,
+            specs=SPECS,
+            code_version="test",
+            built_at=FIRST_BUILD,
         )

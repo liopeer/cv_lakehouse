@@ -35,7 +35,8 @@ Follow these import rules. `tests/test_import_direction.py` checks them.
 
 - Core imports no domain.
 - A domain imports itself and core. No domain imports another domain.
-- `contract/` imports only the standard library, pyarrow, pydantic, core and `contract/`.
+- `contract/` imports only the standard library, pyarrow, pydantic, upath, core and
+  `contract/`.
 - Only `defs/` and `definitions.py` import `defs/`.
 
 Move code into core only when a second domain uses it with the same meaning.

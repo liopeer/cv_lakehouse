@@ -19,12 +19,12 @@ import dataclasses
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Self
 
-import pyarrow.parquet as pq
 from labelformat.model.bounding_box import BoundingBox
+from upath import UPath
 
+from lakehouse_core.parquet_files import read_parquet_table
 from lakehouse_cv.contract.class_registry import CanonicalClass
 from lakehouse_cv.contract.correction_actions import CorrectionAction
 from lakehouse_cv.contract.silver_tables import BoxOrigin, SilverBox, SilverImage
@@ -66,7 +66,7 @@ class CorrectionOverlay:
         self.num_applied = 0
 
     @classmethod
-    def from_snapshot(cls, path: Path | None) -> Self:
+    def from_snapshot(cls, path: UPath | None) -> Self:
         """Read a snapshot file. No file gives an overlay that changes nothing."""
         if path is None:
             return cls([])
@@ -83,7 +83,7 @@ class CorrectionOverlay:
                     else (row["x"], row["y"], row["w"], row["h"])
                 ),
             )
-            for row in pq.read_table(path).to_pylist()
+            for row in read_parquet_table(path).to_pylist()
         )
 
     def apply_to_silver_images(

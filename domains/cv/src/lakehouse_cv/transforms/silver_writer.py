@@ -7,11 +7,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
+from upath import UPath
 
+from lakehouse_core.parquet_files import open_parquet_writer
 from lakehouse_cv.contract.silver_tables import (
     BOX_SCHEMA,
     IMAGE_SCHEMA,
@@ -25,10 +25,10 @@ from lakehouse_cv.contract.silver_tables import (
 class _BatchWriter:
     """Buffer dict rows and flush them as one row group per batch."""
 
-    def __init__(self, path: Path, schema: pa.Schema) -> None:
+    def __init__(self, path: UPath, schema: pa.Schema) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._schema = schema
-        self._writer = pq.ParquetWriter(where=path, schema=schema)
+        self._writer = open_parquet_writer(path=path, schema=schema)
         self._rows: list[dict[str, object]] = []
         self.count = 0
 
@@ -56,7 +56,7 @@ class _BatchWriter:
 
 def write_split(
     *,
-    silver_dir: Path,
+    silver_dir: UPath,
     dataset: str,
     split: str,
     images: Iterable[SilverImage],

@@ -13,7 +13,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 CORE = "lakehouse_core"
-CONTRACT_THIRD_PARTY = frozenset({"pyarrow", "pydantic"})
+CONTRACT_THIRD_PARTY = frozenset({"pyarrow", "pydantic", "upath"})
 
 
 @dataclass(frozen=True)

@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pyarrow as pa
+from upath import UPath
 
 from lakehouse_core.table_spec import Layer, TableSpec
 
@@ -147,19 +147,19 @@ SILVER_TABLES: tuple[TableSpec, ...] = (
 ROWS_PER_ROW_GROUP = 8192
 
 
-def images_file(silver_dir: Path, split: str) -> Path:
+def images_file(silver_dir: UPath, split: str) -> UPath:
     return silver_dir / "images" / f"{split}.parquet"
 
 
-def boxes_file(silver_dir: Path, split: str) -> Path:
+def boxes_file(silver_dir: UPath, split: str) -> UPath:
     return silver_dir / "boxes" / f"{split}.parquet"
 
 
-def embeddings_file(silver_dir: Path, split: str) -> Path:
+def embeddings_file(silver_dir: UPath, split: str) -> UPath:
     return silver_dir / "embeddings" / f"{split}.parquet"
 
 
-def crop_embeddings_file(silver_dir: Path, split: str) -> Path:
+def crop_embeddings_file(silver_dir: UPath, split: str) -> UPath:
     return silver_dir / "crop_embeddings" / f"{split}.parquet"
 
 

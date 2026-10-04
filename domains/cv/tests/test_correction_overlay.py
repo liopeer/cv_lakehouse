@@ -271,6 +271,7 @@ def test_gold_carries_what_a_curator_changed(
     _build_silver(export_lake=export_lake, rows=rows)
     lake = export_lake[0]
     build = build_gold_version(
+        store=lake.store,
         paths=lake.paths,
         specs=[SOURCE_BY_NAME[DATASET].spec],
         code_version="test",

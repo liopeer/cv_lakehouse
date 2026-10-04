@@ -17,7 +17,6 @@ from __future__ import annotations
 import csv
 from argparse import ArgumentParser
 from collections.abc import Iterable, Iterator
-from pathlib import Path
 
 from labelformat.model.bounding_box import BoundingBox, BoundingBoxFormat
 from labelformat.model.category import Category
@@ -27,6 +26,7 @@ from labelformat.model.object_detection import (
     ObjectDetectionInput,
     SingleObjectDetection,
 )
+from upath import UPath
 
 from lakehouse_cv.contract.dataset_spec import DatasetSpec
 from lakehouse_cv.contract.split_roles import SplitRole
@@ -88,12 +88,12 @@ class OpenImagesSource(BronzeSource, BoxAttributeSource):
     spec = SPEC
     published_files = OPEN_IMAGES_FILES
 
-    def image_root(self, bronze_dir: Path, split: str) -> Path:
+    def image_root(self, bronze_dir: UPath, split: str) -> UPath:
         _check_split(split)
         return bronze_dir if split == "train" else bronze_dir / split
 
     def open_labelformat_reader(
-        self, bronze_dir: Path, split: str
+        self, bronze_dir: UPath, split: str
     ) -> ObjectDetectionInput:
         """The labelformat view, which keeps only the single instance boxes.
 
@@ -107,7 +107,7 @@ class OpenImagesSource(BronzeSource, BoxAttributeSource):
             split=split,
         )
 
-    def read_raw_images(self, bronze_dir: Path, split: str) -> Iterator[RawImage]:
+    def read_raw_images(self, bronze_dir: UPath, split: str) -> Iterator[RawImage]:
         """Read every row, with IsGroupOf and IsDepiction alongside the box.
 
         `is_instance_box` says a consumer decides about these. It now can: silver keeps
@@ -139,7 +139,9 @@ class OpenImagesObjectDetectionInput(ObjectDetectionInput):
     width and height. Open Images does not publish them, so they come from the file.
     """
 
-    def __init__(self, *, image_root: Path, annotation_file: Path, split: str) -> None:
+    def __init__(
+        self, *, image_root: UPath, annotation_file: UPath, split: str
+    ) -> None:
         self.image_root = image_root
         self.annotation_file = annotation_file
         self.split = split
@@ -202,7 +204,7 @@ def _build_raw_box(row: dict[str, str], width: int, height: int) -> RawBox:
     )
 
 
-def _rows_by_image(annotation_file: Path) -> dict[str, list[dict[str, str]]]:
+def _rows_by_image(annotation_file: UPath) -> dict[str, list[dict[str, str]]]:
     grouped: dict[str, list[dict[str, str]]] = {}
     with annotation_file.open(newline="") as handle:
         for row in csv.DictReader(handle):
@@ -227,7 +229,7 @@ def is_instance_box(row: dict[str, str]) -> bool:
     return row["IsGroupOf"] != "1" and row["IsDepiction"] != "1"
 
 
-def _annotation_file(bronze_dir: Path, split: str) -> Path:
+def _annotation_file(bronze_dir: UPath, split: str) -> UPath:
     return bronze_dir / BOX_CSV_NAME[split]
 
 

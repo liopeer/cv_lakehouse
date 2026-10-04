@@ -17,7 +17,9 @@ from tests.fixtures import make_pp4av as _fixture
 def test_reads_the_test_split(tmp_path: Path) -> None:
     source = PP4AVSource()
     bronze = _fixture(tmp_path)
-    reject_incomplete_copy(bronze_dir=bronze, published_files=source.published_files)
+    reject_incomplete_copy(
+        bronze_dir=Path(str(bronze)), published_files=source.published_files
+    )
 
     labels = list(
         source.open_labelformat_reader(bronze_dir=bronze, split="test").get_labels()

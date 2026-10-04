@@ -16,16 +16,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol, Self
 
 import duckdb
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 import tritonclient.grpc as grpcclient
 from numpy.typing import NDArray
+from upath import UPath
 
+from lakehouse_core.lake_store import LakeStore
+from lakehouse_core.parquet_files import open_parquet_file, open_parquet_writer
 from lakehouse_cv.contract.silver_tables import (
     CROP_EMBEDDING_SCHEMA,
     EMBEDDING_SCHEMA,
@@ -203,17 +204,17 @@ def _concatenate_embeddings(
 class PreviousSplit:
     """The files of one split as the run before wrote them, set aside for reuse."""
 
-    boxes: Path
-    embeddings: Path
-    crop_embeddings: Path
+    boxes: UPath
+    embeddings: UPath
+    crop_embeddings: UPath
 
 
-def _previous_file(path: Path) -> Path:
+def _previous_file(path: UPath) -> UPath:
     # Not `.parquet`, so a `*.parquet` scan over silver never reads it.
     return path.with_name(path.name + ".previous")
 
 
-def stash_previous_split(silver_dir: Path, split: str) -> PreviousSplit | None:
+def stash_previous_split(silver_dir: UPath, split: str) -> PreviousSplit | None:
     """Set the boxes and the vectors of a split aside, before the run rewrites them.
 
     Return None when one of the three is missing. The run then embeds everything.
@@ -231,7 +232,7 @@ def stash_previous_split(silver_dir: Path, split: str) -> PreviousSplit | None:
     return PreviousSplit(*(_previous_file(path) for path in paths))
 
 
-def discard_previous_split(silver_dir: Path, split: str) -> None:
+def discard_previous_split(silver_dir: UPath, split: str) -> None:
     for path in (
         boxes_file(silver_dir=silver_dir, split=split),
         embeddings_file(silver_dir=silver_dir, split=split),
@@ -240,7 +241,7 @@ def discard_previous_split(silver_dir: Path, split: str) -> None:
         _previous_file(path).unlink(missing_ok=True)
 
 
-def clear_embeddings(silver_dir: Path, split: str) -> None:
+def clear_embeddings(silver_dir: UPath, split: str) -> None:
     """Remove one split's embedding files.
 
     A rematerialisation with no server rewrites the images and the boxes, so a vector
@@ -253,7 +254,7 @@ def clear_embeddings(silver_dir: Path, split: str) -> None:
 def write_image_embeddings(
     *,
     embedder: Embedder,
-    silver_dir: Path,
+    silver_dir: UPath,
     dataset: str,
     split: str,
     image_root: str,
@@ -288,7 +289,7 @@ def write_image_embeddings(
 def write_crop_embeddings(
     *,
     embedder: Embedder,
-    silver_dir: Path,
+    silver_dir: UPath,
     dataset: str,
     split: str,
     image_root: str,
@@ -330,8 +331,9 @@ class BoxKeys:
 
 def reuse_or_embed_images(
     *,
+    store: LakeStore,
     embedder: Embedder,
-    silver_dir: Path,
+    silver_dir: UPath,
     dataset: str,
     split: str,
     image_root: str,
@@ -349,7 +351,7 @@ def reuse_or_embed_images(
         "rows": str(images_file(silver_dir=silver_dir, split=split)),
         "previous": str(previous.embeddings),
     }
-    with duckdb.connect() as connection:
+    with store.duckdb() as connection:
         writer = _EmbeddingWriter(
             path=fresh, schema=EMBEDDING_SCHEMA, dataset=dataset, split=split
         )
@@ -378,8 +380,9 @@ def reuse_or_embed_images(
 
 def reuse_or_embed_crops(
     *,
+    store: LakeStore,
     embedder: Embedder,
-    silver_dir: Path,
+    silver_dir: UPath,
     dataset: str,
     split: str,
     image_root: str,
@@ -398,7 +401,7 @@ def reuse_or_embed_crops(
         "previous": str(previous.crop_embeddings),
         "previous_boxes": str(previous.boxes),
     }
-    with duckdb.connect() as connection:
+    with store.duckdb() as connection:
         writer = _EmbeddingWriter(
             path=fresh, schema=CROP_EMBEDDING_SCHEMA, dataset=dataset, split=split
         )
@@ -476,11 +479,11 @@ def _write_query_rows(
     connection: duckdb.DuckDBPyConnection,
     query: str,
     parameters: dict[str, str],
-    path: Path,
+    path: UPath,
     schema: pa.Schema,
 ) -> int:
     count = 0
-    with pq.ParquetWriter(where=path, schema=schema) as writer:
+    with open_parquet_writer(path=path, schema=schema) as writer:
         for batch in connection.execute(
             query=query, parameters=parameters
         ).to_arrow_reader(ITEMS_PER_REQUEST):
@@ -505,10 +508,12 @@ class _EmbeddingWriter:
     produced it, so this builds the Arrow arrays directly.
     """
 
-    def __init__(self, path: Path, schema: pa.Schema, dataset: str, split: str) -> None:
+    def __init__(
+        self, path: UPath, schema: pa.Schema, dataset: str, split: str
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._schema = schema
-        self._writer = pq.ParquetWriter(where=path, schema=schema)
+        self._writer = open_parquet_writer(path=path, schema=schema)
         self._dataset = dataset
         self._split = split
         self.count = 0
@@ -550,7 +555,7 @@ def _wrap_vectors_as_list_array(vectors: NDArray[np.float32]) -> pa.ListArray:
     )
 
 
-def _read_parquet_batches(path: Path, columns: list[str]) -> Iterator[pa.RecordBatch]:
-    return pq.ParquetFile(path).iter_batches(
+def _read_parquet_batches(path: UPath, columns: list[str]) -> Iterator[pa.RecordBatch]:
+    return open_parquet_file(path).iter_batches(
         batch_size=ITEMS_PER_REQUEST, columns=columns
     )

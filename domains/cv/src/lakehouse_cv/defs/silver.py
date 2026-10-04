@@ -14,13 +14,14 @@ image, and of a box that did not move, from the run before.
 
 from collections import Counter
 from collections.abc import Mapping
-from pathlib import Path
 
 import dagster as dg
 import duckdb
+from upath import UPath
 
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST
 from lakehouse_core.fingerprints import sha256_fingerprint
+from lakehouse_core.lake_store import LakeStore, is_local
 from lakehouse_core.manifest_files import read_manifest, write_manifest
 from lakehouse_cv.contract.class_registry import (
     CanonicalClass,
@@ -168,6 +169,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 written_vectors, written_crops, reused = 0, 0, 0
             else:
                 written_vectors, written_crops, reused = _embed_split(
+                    store=lake.store,
                     embedder=embedder,
                     silver_dir=silver_dir,
                     dataset=name,
@@ -234,8 +236,9 @@ def _describes_this_code(manifest: SilverManifest, code_version: str) -> bool:
 
 def _embed_split(
     *,
+    store: LakeStore,
     embedder: Embedder,
-    silver_dir: Path,
+    silver_dir: UPath,
     dataset: str,
     split: str,
     image_root: str,
@@ -246,17 +249,26 @@ def _embed_split(
     Return the image count, the crop count, and how many vectors of the two came from
     the run before.
     """
+    root = store.resolve(image_root)
+    if not is_local(root):
+        raise NotImplementedError(
+            f"Triton reads images only from a local disk, and {root} is not on one."
+        )
     target = {
         "embedder": embedder,
         "silver_dir": silver_dir,
         "dataset": dataset,
         "split": split,
-        "image_root": image_root,
+        "image_root": str(root),
     }
     if previous is None:
         return write_image_embeddings(**target), write_crop_embeddings(**target), 0
-    num_embeddings, reused_images = reuse_or_embed_images(**target, previous=previous)
-    num_crops, reused_crops = reuse_or_embed_crops(**target, previous=previous)
+    num_embeddings, reused_images = reuse_or_embed_images(
+        **target, store=store, previous=previous
+    )
+    num_crops, reused_crops = reuse_or_embed_crops(
+        **target, store=store, previous=previous
+    )
     return num_embeddings, num_crops, reused_images + reused_crops
 
 
@@ -306,7 +318,7 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
         problems: list[str] = []
         checked = 0
         for split in _read_manifest_splits(lake=lake, name=name):
-            with duckdb.connect() as connection:
+            with lake.store.duckdb() as connection:
                 rows = connection.execute(
                     query=_BOX_PROBLEM_QUERY,
                     parameters={
@@ -350,8 +362,8 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
         missing: list[str] = []
         checked = 0
         for split in manifest.splits:
-            root = Path(manifest.image_roots[split])
-            with duckdb.connect() as connection:
+            root = lake.store.resolve(manifest.image_roots[split])
+            with lake.store.duckdb() as connection:
                 names = connection.execute(
                     query=_IMAGE_NAME_QUERY,
                     parameters={
@@ -405,7 +417,7 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
             "snapshot": str(snapshot_path),
             "boxes": str(silver_dir / "boxes" / "*.parquet"),
         }
-        with duckdb.connect() as connection:
+        with lake.store.duckdb() as connection:
             orphans = connection.execute(
                 query=_ORPHAN_CORRECTION_QUERY, parameters=parameters
             ).fetchall()
@@ -488,7 +500,7 @@ order by label_name
 """
 
 
-def _count_boxes(connection: duckdb.DuckDBPyConnection, path: Path) -> int:
+def _count_boxes(connection: duckdb.DuckDBPyConnection, path: UPath) -> int:
     row = connection.execute(
         query="select count(*) from read_parquet($path)",
         parameters={"path": str(path)},

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import dagster as dg
 import pyarrow.parquet as pq
+from upath import UPath
 
 from lakehouse_core.bronze_asset import build_bronze_asset
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST
@@ -48,7 +49,7 @@ def test_bronze_links_instead_of_downloading(
 
 def test_bronze_reports_only_the_splits_on_disk(tmp_path: Path) -> None:
     bronze = make_wider_face(tmp_path)
-    shutil.rmtree(bronze / "WIDER_val")
+    shutil.rmtree(str(bronze / "WIDER_val"))
     splits = detect_materialized_splits(
         source=SOURCE_BY_NAME["wider_face"], bronze_dir=bronze
     )
@@ -173,7 +174,7 @@ def test_silver_embeds_every_image_and_every_box(
     )
 
 
-def boxes_of(silver_dir: Path) -> list[str]:
+def boxes_of(silver_dir: UPath) -> list[str]:
     return (
         pq.read_table(boxes_file(silver_dir=silver_dir, split="train"))
         .column("file_name")
@@ -181,7 +182,7 @@ def boxes_of(silver_dir: Path) -> list[str]:
     )
 
 
-def classes_of(silver_dir: Path, split: str) -> dict[str, int]:
+def classes_of(silver_dir: UPath, split: str) -> dict[str, int]:
     """Count one split's boxes per class. The manifest no longer carries the tally."""
     names = (
         pq.read_table(boxes_file(silver_dir=silver_dir, split=split))
@@ -191,11 +192,11 @@ def classes_of(silver_dir: Path, split: str) -> dict[str, int]:
     return dict(Counter(names))
 
 
-def num_rows(path: Path) -> int:
+def num_rows(path: UPath) -> int:
     return pq.read_metadata(path).num_rows
 
 
-def attrs_of(silver_dir: Path, split: str) -> set[str]:
+def attrs_of(silver_dir: UPath, split: str) -> set[str]:
     """The `attr_*` columns this split fills. The manifest no longer names them."""
     table = pq.read_table(boxes_file(silver_dir=silver_dir, split=split))
     return {

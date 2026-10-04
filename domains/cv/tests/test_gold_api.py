@@ -43,12 +43,13 @@ def client(
         assets=[silver_defs.build_silver_asset(name) for name in DATASETS],
     )
     build_gold_version(
+        store=embedding_lake.store,
         paths=embedding_lake.paths,
         specs=SPECS,
         code_version="test",
         built_at=FIRST_BUILD,
     )
-    return TestClient(create_app(embedding_lake.paths))
+    return TestClient(create_app(embedding_lake.store))
 
 
 def _rows(client: TestClient, path: str, **params: object) -> list[dict]:
@@ -59,7 +60,7 @@ def _rows(client: TestClient, path: str, **params: object) -> list[dict]:
 
 
 def test_the_api_answers_503_before_gold_exists(lake: CvLakeResource) -> None:
-    client = TestClient(create_app(lake.paths))
+    client = TestClient(create_app(lake.store))
     assert client.get("/healthz").json() == {"status": "ok"}
     assert client.get("/v1/meta").status_code == 503
     assert client.get("/v1/boxes").status_code == 503
@@ -73,7 +74,7 @@ def test_meta_is_the_gold_manifest(client: TestClient) -> None:
 
 def test_classes_are_the_class_registry(lake: CvLakeResource) -> None:
     """A consumer that creates labels needs every class, also one with no box yet."""
-    classes = TestClient(create_app(lake.paths)).get("/v1/classes").json()
+    classes = TestClient(create_app(lake.store)).get("/v1/classes").json()
     assert classes[0] == {"class_id": 0, "class_name": "face"}
     assert len(classes) == len(CanonicalClass)
 

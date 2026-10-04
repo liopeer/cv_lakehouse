@@ -14,11 +14,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 
-import duckdb
 import pyarrow as pa
+from upath import UPath
 
+from lakehouse_core.lake_store import LakeStore
 from lakehouse_cv.contract.gold_tables import (
     GOLD_BOX_SCHEMA,
     GOLD_CROP_EMBEDDING_SCHEMA,
@@ -86,6 +86,7 @@ class GoldPage:
 
 def read_gold_page(
     *,
+    store: LakeStore,
     paths: CvLakePaths,
     manifest: GoldManifest,
     release: ReleaseManifest | None,
@@ -99,6 +100,7 @@ def read_gold_page(
     """
     layout = _LAYOUTS[table]
     rows = _read_rows(
+        store=store,
         paths=paths,
         manifest=manifest,
         release=release,
@@ -115,6 +117,7 @@ def read_gold_page(
 
 def _read_rows(
     *,
+    store: LakeStore,
     paths: CvLakePaths,
     manifest: GoldManifest,
     release: ReleaseManifest | None,
@@ -162,7 +165,7 @@ def _read_rows(
     order by g.{layout.key}
     limit $limit
     """
-    with duckdb.connect() as connection:
+    with store.duckdb() as connection:
         # A timestamp then reaches Arrow in UTC, whatever the machine is set to.
         connection.execute("set TimeZone = 'UTC'")
         rows = connection.execute(query=query, parameters=parameters).to_arrow_table()
@@ -180,8 +183,8 @@ def _select_files(
     """Return the gold files and the silver embedding files of the selected splits."""
     gold_file = gold_boxes_file if layout.reads_boxes else gold_images_file
     embedding_file = crop_embeddings_file if layout.reads_boxes else embeddings_file
-    gold_files: list[Path] = []
-    embedding_files: list[Path] = []
+    gold_files: list[UPath] = []
+    embedding_files: list[UPath] = []
     for directory, dataset, split in _iter_splits(
         paths=paths, manifest=manifest, release=release
     ):
@@ -205,7 +208,7 @@ def _select_files(
 
 def _iter_splits(
     *, paths: CvLakePaths, manifest: GoldManifest, release: ReleaseManifest | None
-) -> Iterator[tuple[Path, GoldDataset, GoldSplit]]:
+) -> Iterator[tuple[UPath, GoldDataset, GoldSplit]]:
     """Yield every split with the directory that holds its files."""
     version_dir = paths.gold_version_dir(manifest.version)
     for dataset in manifest.datasets:

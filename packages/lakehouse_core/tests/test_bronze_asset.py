@@ -7,6 +7,7 @@ from pathlib import Path
 
 import dagster as dg
 import pytest
+from upath import UPath
 
 from lakehouse_core.bronze_asset import build_bronze_asset
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST, BronzeManifest, BronzeMode
@@ -45,7 +46,7 @@ class _RowsSource(PublishedSource[_RowsManifest]):
     )
 
     def describe_bronze_copy(
-        self, *, bronze_dir: Path, base: BronzeManifest
+        self, *, bronze_dir: UPath, base: BronzeManifest
     ) -> _RowsManifest:
         row_files = sorted(path.name for path in bronze_dir.glob("*.txt"))
         if not row_files:

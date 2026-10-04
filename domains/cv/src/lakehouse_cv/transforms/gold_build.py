@@ -13,17 +13,18 @@ the previous version keeps the previous time, so a reader can ask what changed s
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 import duckdb
 import pyarrow as pa
-import pyarrow.parquet as pq
+from upath import UPath
 
+from lakehouse_core.lake_files import remove_tree, replace_file
+from lakehouse_core.lake_store import LakeStore
 from lakehouse_core.manifest_files import read_manifest, write_manifest
+from lakehouse_core.parquet_files import open_parquet_writer, read_parquet_schema
 from lakehouse_cv.contract.box_identity import IMAGE_ID_SQL
 from lakehouse_cv.contract.dataset_spec import DatasetSpec
 from lakehouse_cv.contract.gold_tables import (
@@ -93,6 +94,7 @@ def read_gold_manifest(paths: CvLakePaths) -> GoldManifest | None:
 
 def build_gold_version(
     *,
+    store: LakeStore,
     paths: CvLakePaths,
     specs: Sequence[DatasetSpec],
     code_version: str,
@@ -102,7 +104,7 @@ def build_gold_version(
     version = 1 if previous is None else previous.version + 1
     version_dir = paths.gold_version_dir(version)
     # A build that failed leaves a directory that no manifest points at.
-    shutil.rmtree(path=version_dir, ignore_errors=True)
+    remove_tree(version_dir)
     previous_dir = (
         None if previous is None else paths.gold_version_dir(previous.version)
     )
@@ -110,7 +112,7 @@ def build_gold_version(
     datasets: list[GoldDataset] = []
     skipped: list[str] = []
     num_images = num_boxes = 0
-    with duckdb.connect() as connection:
+    with store.duckdb() as connection:
         # A timestamp then reaches Arrow in UTC, whatever the machine is set to.
         connection.execute("set TimeZone = 'UTC'")
         for spec in specs:
@@ -126,9 +128,7 @@ def build_gold_version(
                 gold_split = GoldSplit(
                     split=split,
                     role=spec.split_roles[split],
-                    image_root=_relative_to_lake_root(
-                        path=silver.image_roots[split], paths=paths
-                    ),
+                    image_root=store.location(store.resolve(silver.image_roots[split])),
                 )
                 splits.append(gold_split)
                 constants = {
@@ -205,25 +205,21 @@ def build_gold_version(
     )
 
 
-def _relative_to_lake_root(path: str, paths: CvLakePaths) -> str:
-    return Path(path).relative_to(paths.root).as_posix()
-
-
 def _find_previous_file(
     *,
-    previous_dir: Path | None,
-    gold_file: Callable[..., Path],
+    previous_dir: UPath | None,
+    gold_file: Callable[..., UPath],
     schema: pa.Schema,
     dataset: str,
     split: str,
-) -> Path | None:
+) -> UPath | None:
     if previous_dir is None:
         return None
     path = gold_file(version_dir=previous_dir, dataset=dataset, split=split)
     if not path.exists():
         return None
     # A version that an older schema wrote has nothing to compare a new column with.
-    return path if pq.read_schema(path) == schema else None
+    return path if read_parquet_schema(path) == schema else None
 
 
 def _write_rows(
@@ -233,8 +229,8 @@ def _write_rows(
     parameters: dict[str, object],
     schema: pa.Schema,
     key: str,
-    path: Path,
-    previous_path: Path | None,
+    path: UPath,
+    previous_path: UPath | None,
 ) -> int:
     """Write the rows of one split, in the columns and the types of the schema."""
     if previous_path is not None:
@@ -245,9 +241,8 @@ def _write_rows(
         ),
         parameters=parameters,
     ).to_arrow_reader(ROWS_PER_ROW_GROUP)
-    path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    with pq.ParquetWriter(where=path, schema=schema) as writer:
+    with open_parquet_writer(path=path, schema=schema) as writer:
         for batch in reader:
             # The cast is the write time validation: it rejects a null in a column
             # that the schema declares not null.
@@ -284,10 +279,10 @@ def _replace_gold_manifest(paths: CvLakePaths, manifest: GoldManifest) -> None:
     path = paths.gold_dir() / GOLD_MANIFEST
     staged = path.with_suffix(".json.staged")
     write_manifest(path=staged, manifest=manifest)
-    staged.replace(path)
+    replace_file(source=staged, target=path)
 
 
 def _prune_gold_versions(paths: CvLakePaths, current_version: int) -> None:
     for version_dir in paths.gold_version_dir(current_version).parent.iterdir():
         if int(version_dir.name) <= current_version - GOLD_VERSIONS_KEPT:
-            shutil.rmtree(version_dir)
+            remove_tree(version_dir)

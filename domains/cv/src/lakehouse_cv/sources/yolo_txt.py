@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 from collections.abc import Iterable, Sequence
-from pathlib import Path
 
 from labelformat.model.bounding_box import BoundingBox, BoundingBoxFormat
 from labelformat.model.category import Category
@@ -22,6 +21,7 @@ from labelformat.model.object_detection import (
     ObjectDetectionInput,
     SingleObjectDetection,
 )
+from upath import UPath
 
 from lakehouse_cv.sources.base import iter_image_paths, read_image_size
 
@@ -31,8 +31,8 @@ class YoloTxtObjectDetectionInput(ObjectDetectionInput):
 
     def __init__(
         self,
-        image_root: Path,
-        label_root: Path,
+        image_root: UPath,
+        label_root: UPath,
         class_names: Sequence[str],
         require_label_file: bool = True,
         subdirs: Sequence[str] | None = None,
@@ -91,7 +91,7 @@ class YoloTxtObjectDetectionInput(ObjectDetectionInput):
 
 
 def _read_detections_from_label_file(
-    label_file: Path, image: Image, category_by_id: dict[int, Category]
+    label_file: UPath, image: Image, category_by_id: dict[int, Category]
 ) -> Iterable[SingleObjectDetection]:
     for line in label_file.read_text().splitlines():
         parts = line.split()
