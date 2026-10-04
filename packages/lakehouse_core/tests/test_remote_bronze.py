@@ -12,6 +12,7 @@ import tarfile
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -109,7 +110,8 @@ def _download(bronze_dir: UPath, server: _Server, content: bytes = CONTENT) -> U
 
 def _open_uploads(s3_dir: UPath) -> list[str]:
     bucket, _, prefix = s3_dir.path.partition("/")
-    response = s3_dir.fs.call_s3("list_multipart_uploads", Bucket=bucket, Prefix=prefix)
+    s3 = cast(Any, s3_dir.fs)
+    response = s3.call_s3("list_multipart_uploads", Bucket=bucket, Prefix=prefix)
     return [upload["Key"] for upload in response.get("Uploads", [])]
 
 
@@ -226,8 +228,9 @@ def _make_archives(directory: Path) -> list[Path]:
 
 
 def _list_files(root: Path | UPath) -> dict[str, bytes]:
+    prefix = f"{str(root).rstrip('/')}/"
     return {
-        path.relative_to(root).as_posix(): path.read_bytes()
+        str(path).removeprefix(prefix): path.read_bytes()
         for path in root.rglob("*")
         if path.is_file()
     }

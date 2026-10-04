@@ -172,8 +172,8 @@ Silver reads the URL and skips the embedding when it is unset, so a machine with
 server still builds the layer. The two counts land in the asset metadata either way.
 
 The server resolves the path itself, so the stack mounts `$CV_LAKEHOUSE_ROOT` read only
-at the same path inside the container. If a bronze directory is a symlink to a path
-outside the root, add a mount for that path to the compose file of the stack.
+at the same path inside the container. If bronze links a copy outside the root, add a
+mount for that path to the compose file of the stack.
 
 A silver rebuild on the same code embeds only what has no vector yet. An image keeps
 its vector, because bronze pins the pixels. A box keeps its vector when its four
