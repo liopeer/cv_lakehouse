@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.1.0...studio-v0.2.0) (2026-10-04)
+
+
+### Features
+
+* **studio:** keep the path of a linked copy outside the lake ([#36](https://github.com/liopeer/cv_lakehouse/issues/36)) ([6b03b25](https://github.com/liopeer/cv_lakehouse/commit/6b03b257c968061fc532a659c9454845617ccc99))
+
 ## 0.1.0 (2026-10-04)
 
 
