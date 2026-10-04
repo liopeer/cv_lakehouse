@@ -201,14 +201,7 @@ def test_silver_sends_triton_presigned_urls_on_s3(
     assert all(url.startswith(f"{s3_endpoint}/{BUCKET}/{prefix}/") for url in urls)
     assert all("Signature=" in url for url in urls)
     first = embedder.paths[0]
-    key = first.split("?")[0].removeprefix(f"{s3_endpoint}/{BUCKET}/")
+    key = first.split("?")[0].removeprefix(f"{s3_endpoint}/")
     response = httpx.get(first)
     assert response.status_code == 200
-    assert (
-        response.content
-        == (UPath(f"s3://{BUCKET}/{key}", **_s3_options(s3_endpoint))).read_bytes()
-    )
-
-
-def _s3_options(endpoint: str) -> dict[str, str]:
-    return {"key": "key", "secret": "secret", "endpoint_url": endpoint}
+    assert response.content == lake.store.resolve(f"s3://{key}").read_bytes()
