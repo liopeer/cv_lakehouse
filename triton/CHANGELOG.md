@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.2.0...triton-v0.3.0) (2026-10-04)
+
+
+### Features
+
+* **triton:** fetch image urls, and crop image bytes ([#33](https://github.com/liopeer/cv_lakehouse/issues/33)) ([558394c](https://github.com/liopeer/cv_lakehouse/commit/558394c395e2c072b9484b1bc87089dad0a09e6b))
+
 ## [0.2.0](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.1.0...triton-v0.2.0) (2026-09-20)
 
 
