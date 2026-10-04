@@ -78,7 +78,7 @@ class LakeStore:
             yield connection
 
 
-def _duckdb_config() -> dict[str, str]:
+def _duckdb_config() -> dict[str, bool | float | int | list[str] | str]:
     # An image installs the extensions here, so a run never downloads them, whatever
     # the user that it runs as.
     directory = os.environ.get("DUCKDB_EXTENSION_DIRECTORY")
