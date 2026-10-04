@@ -7,6 +7,12 @@ authors = [{ name = "Lionel Peer" }]
 license = "MIT"
 dependencies = [
     "dagster==1.13.21",
+    # A deployment runs the webserver and the daemon from this image. dagster-postgres
+    # holds the instance storage, and dagster-aws the compute logs on S3. Their 0.x
+    # versions pin the dagster version above.
+    "dagster-aws==0.29.21",
+    "dagster-postgres==0.29.21",
+    "dagster-webserver==1.13.21",
     "duckdb>=1.2.2,<1.6",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
