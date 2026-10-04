@@ -94,9 +94,10 @@ architecture. The ROCm image also keeps the compiled MIGraphX programs there. A 
 reuses them. A new release or a different GPU builds again. A model only runs on the GPU
 architecture and the library versions that built it, so CI cannot build one.
 
-Silver sends an absolute image path, so the stack mounts `$CV_LAKEHOUSE_ROOT` read only
-at the same path inside the container. If a bronze directory is a symlink to a path
-outside the root, add a mount for that path to the compose file of the stack.
+A local image path is read inside the container. For a lake on a local disk, the stack
+mounts `$CV_LAKEHOUSE_ROOT` read only at the same path inside the container. A lake in
+an object store needs no mount, since silver sends presigned URLs. If bronze links a
+local copy outside the root, add a mount for that path to the compose file of the stack.
 
 ## Export
 
@@ -113,8 +114,14 @@ the ONNX. The MobileCLIP export wrappers inherit `TensorRTMixin`. The commands
 - Model: `mobileclip_s0`
 - Input: exactly one of `IMAGE_PATH`, `IMAGE_BYTES` or `TEXT`, each a `BYTES` tensor of
   shape `[N]`
-- Optional crop inputs, with `IMAGE_PATH` only: `CROP_X`, `CROP_Y`, `CROP_WIDTH`,
-  `CROP_HEIGHT`, each an `INT64` tensor of shape `[N]`. `-1` means the full image.
+- `IMAGE_PATH` is a local path inside the container, or an `http` or `https` URL. The
+  server holds no credentials, so a URL into private storage, such as S3, is presigned.
+  The entry model fetches each distinct URL of a request once, then sends the bytes
+  through the bytes pipeline. Any other scheme, such as `s3://`, is refused. An error
+  names a URL without its query, so no signature reaches a log.
+- Optional crop inputs, with `IMAGE_PATH` or `IMAGE_BYTES`: `CROP_X`, `CROP_Y`,
+  `CROP_WIDTH`, `CROP_HEIGHT`, each an `INT64` tensor of shape `[N]`. `-1` means the
+  full image.
 - Output: `EMBEDDING`, float32 `[N, 512]`, L2 normalised
 
 One request carries many items. The entry model fans them out as concurrent sub-requests,
@@ -124,6 +131,9 @@ execution. `cv_lakehouse.embeddings` is the client.
 `mobileclip_s0` is the only model to call. Every other model in `model_repository` starts
 with an underscore, because it is a step that `mobileclip_s0` reaches through. Triton
 loads and serves them all, so the underscore is a convention, not a rule it enforces.
+
+Two parameters of `mobileclip_s0` tune the fetch: `fetch_workers`, 32 by default, and
+`fetch_timeout_seconds`, 60 by default.
 
 `model_repository/common` holds the models that both images share. `model_repository/cuda`
 and `model_repository/rocm` hold the encoders and the image preprocessing of each image.

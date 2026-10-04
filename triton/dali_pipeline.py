@@ -6,6 +6,7 @@
 # GPU preprocessing pipeline for _mobileclip_s0_image_preprocessing, run through
 # NVIDIA DALI instead of the CPU/PIL Python backend. Reproduces:
 #   IMAGE_PATH or IMAGE_BYTES -> optional crop -> resize-shorter-side(256) -> center-crop(256)
+# Both kinds take the CROP_* inputs.
 #   -> /255 -> CHW float32
 # Serialized to model.dali by entrypoint.sh on the first start; the Triton DALI
 # backend loads the serialized plan directly. The script runs inside the tritonserver
@@ -24,25 +25,14 @@ def mobileclip_preprocessing_pipeline(input_kind: str):
     if input_kind == "path":
         paths = fn.external_source(name="IMAGE_PATH", dtype=types.UINT8, ndim=1)
         encoded = fn.io.file.read(paths)
-        crop_x = fn.external_source(name="CROP_X", dtype=types.INT64, ndim=1)
-        crop_y = fn.external_source(name="CROP_Y", dtype=types.INT64, ndim=1)
-        crop_w = fn.external_source(name="CROP_WIDTH", dtype=types.INT64, ndim=1)
-        crop_h = fn.external_source(name="CROP_HEIGHT", dtype=types.INT64, ndim=1)
     else:
         encoded = fn.external_source(name="IMAGE_BYTES", dtype=types.UINT8, ndim=1)
+    crop_x = fn.external_source(name="CROP_X", dtype=types.INT64, ndim=1)
+    crop_y = fn.external_source(name="CROP_Y", dtype=types.INT64, ndim=1)
+    crop_w = fn.external_source(name="CROP_WIDTH", dtype=types.INT64, ndim=1)
+    crop_h = fn.external_source(name="CROP_HEIGHT", dtype=types.INT64, ndim=1)
 
     image = fn.decoders.image(encoded, device="mixed", output_type=types.RGB)
-
-    if input_kind == "bytes":
-        resized = fn.resize(image, resize_shorter=IMAGE_SIZE, interp_type=types.INTERP_LINEAR)
-        return fn.crop_mirror_normalize(
-            resized,
-            crop=(IMAGE_SIZE, IMAGE_SIZE),
-            mean=0.0,
-            std=255.0,
-            output_layout="CHW",
-            dtype=types.FLOAT,
-        )
 
     # -1 in CROP_* means "no crop requested" -> fall back to the full image,
     # resolved per-sample via cheap header-only shape peeking + arithmetic
