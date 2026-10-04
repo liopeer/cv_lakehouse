@@ -132,5 +132,5 @@ jobs:
           target: ${{ matrix.target }}
           push: false
           provenance: false
-          cache-from: type=gha,scope=studio
-          cache-to: type=gha,scope=studio,mode=max
+          cache-from: type=gha,scope=studio-${{ matrix.target }}
+          cache-to: type=gha,scope=studio-${{ matrix.target }},mode=max
