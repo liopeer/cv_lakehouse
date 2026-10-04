@@ -4,7 +4,7 @@
 #
 
 # GPU image preprocessing for the ROCm image, in place of the DALI models. The
-# `input_kind` parameter picks IMAGE_PATH with the CROP_* inputs, or IMAGE_BYTES.
+# `input_kind` parameter picks IMAGE_PATH or IMAGE_BYTES. Both take the CROP_* inputs.
 # `_mobileclip_s0_image_bytes_preprocessing` links to this file.
 #
 # The output goes back as a CPU tensor, and the ORT backend copies it to the GPU.
@@ -68,10 +68,10 @@ class TritonPythonModel:
     def _read_request(self, request):
         if self._input_kind == "bytes":
             rows = pb_utils.get_input_tensor_by_name(request, "IMAGE_BYTES").as_numpy()
-            return [row.tobytes() for row in rows], [(NO_CROP,) * 4] * len(rows)
-
-        rows = pb_utils.get_input_tensor_by_name(request, "IMAGE_PATH").as_numpy()
-        encoded = [_read_file(row.tobytes().decode("utf-8")) for row in rows]
+            encoded = [row.tobytes() for row in rows]
+        else:
+            rows = pb_utils.get_input_tensor_by_name(request, "IMAGE_PATH").as_numpy()
+            encoded = [_read_file(row.tobytes().decode("utf-8")) for row in rows]
         crops = [
             pb_utils.get_input_tensor_by_name(request, name).as_numpy().reshape(-1)
             for name in _CROP_NAMES

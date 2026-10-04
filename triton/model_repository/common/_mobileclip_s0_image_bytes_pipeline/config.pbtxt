@@ -6,6 +6,26 @@ input [
     name: "IMAGE_BYTES"
     data_type: TYPE_UINT8
     dims: [ -1 ]
+  },
+  {
+    name: "CROP_X"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_Y"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_WIDTH"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_HEIGHT"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
   }
 ]
 output [
@@ -21,6 +41,10 @@ ensemble_scheduling {
       model_name: "_mobileclip_s0_image_bytes_preprocessing"
       model_version: -1
       input_map { key: "IMAGE_BYTES" value: "IMAGE_BYTES" }
+      input_map { key: "CROP_X" value: "CROP_X" }
+      input_map { key: "CROP_Y" value: "CROP_Y" }
+      input_map { key: "CROP_WIDTH" value: "CROP_WIDTH" }
+      input_map { key: "CROP_HEIGHT" value: "CROP_HEIGHT" }
       output_map { key: "images" value: "preprocessed_images" }
     },
     {

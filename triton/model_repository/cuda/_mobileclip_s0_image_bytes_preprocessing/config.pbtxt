@@ -9,6 +9,26 @@ input [
     name: "IMAGE_BYTES"
     data_type: TYPE_UINT8
     dims: [ -1 ]
+  },
+  {
+    name: "CROP_X"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_Y"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_WIDTH"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "CROP_HEIGHT"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
   }
 ]
 output [

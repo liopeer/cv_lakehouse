@@ -8,6 +8,8 @@ import json
 import numpy as np
 import triton_python_backend_utils as pb_utils
 
+from shared_deps.image_sources import ImageFetchError, fetch_urls, is_url
+
 _IMAGE_PATH_INPUT = "IMAGE_PATH"
 _IMAGE_BYTES_INPUT = "IMAGE_BYTES"
 _TEXT_INPUT = "TEXT"
@@ -18,6 +20,8 @@ _CROP_HEIGHT_INPUT = "CROP_HEIGHT"
 _EMBEDDING_OUTPUT = "EMBEDDING"
 _INTERNAL_EMBEDDING_OUTPUT = "embeddings"
 _MAX_CONCURRENT_SUB_REQUESTS_PARAMETER = "max_concurrent_sub_requests"
+_FETCH_WORKERS_PARAMETER = "fetch_workers"
+_FETCH_TIMEOUT_SECONDS_PARAMETER = "fetch_timeout_seconds"
 
 # The image preprocessing model's CROP_* inputs are required (not optional),
 # since a single ragged-length UINT8 IMAGE_PATH row can't be batched together
@@ -34,6 +38,12 @@ _NO_CROP = -1
 # actually helps.
 _DEFAULT_MAX_CONCURRENT_SUB_REQUESTS = 256
 
+# An IMAGE_PATH may be an http or https URL, such as a presigned URL into S3. The model
+# fetches each distinct URL of a request once, so the boxes of one image share a fetch,
+# and sends the bytes through the bytes pipeline with their crops.
+_DEFAULT_FETCH_WORKERS = 32
+_DEFAULT_FETCH_TIMEOUT_SECONDS = 60
+
 
 class TritonPythonModel:
     def initialize(self, args):
@@ -43,6 +53,14 @@ class TritonPythonModel:
             default=_DEFAULT_MAX_CONCURRENT_SUB_REQUESTS,
         )
         self._semaphore = asyncio.Semaphore(max_concurrent_sub_requests)
+        self._fetch_workers = _get_model_parameter_int(
+            args=args, name=_FETCH_WORKERS_PARAMETER, default=_DEFAULT_FETCH_WORKERS
+        )
+        self._fetch_timeout_seconds = _get_model_parameter_int(
+            args=args,
+            name=_FETCH_TIMEOUT_SECONDS_PARAMETER,
+            default=_DEFAULT_FETCH_TIMEOUT_SECONDS,
+        )
 
     async def execute(self, requests):
         return list(await asyncio.gather(*(self._execute_one(request) for request in requests)))
@@ -65,6 +83,7 @@ class TritonPythonModel:
         if image_path_input is not None:
             image_paths = _decode_string_array(image_path_input.as_numpy())
             crop_boxes = _get_crop_boxes(request=request, count=len(image_paths))
+            fetched = await self._fetch_url_images(image_paths)
 
             # Fan the images in this request out as concurrent BLS sub-requests
             # (rather than one call carrying all of them) so Triton's dynamic
@@ -74,15 +93,20 @@ class TritonPythonModel:
             # The semaphore bounds how many of these are in flight at once.
             embeddings = await asyncio.gather(
                 *(
-                    self._infer_one_image(image_path=path, crop_box=crop_box)
+                    self._infer_one_image_bytes(value=fetched[path], crop_box=crop_box)
+                    if path in fetched
+                    else self._infer_one_image(image_path=path, crop_box=crop_box)
                     for path, crop_box in zip(image_paths, crop_boxes)
                 )
             )
         elif image_bytes_input is not None:
-            _raise_if_crop_inputs_present(request=request)
             image_bytes = _get_bytes_values(image_bytes_input.as_numpy())
+            crop_boxes = _get_crop_boxes(request=request, count=len(image_bytes))
             embeddings = await asyncio.gather(
-                *(self._infer_one_image_bytes(value=value) for value in image_bytes)
+                *(
+                    self._infer_one_image_bytes(value=value, crop_box=crop_box)
+                    for value, crop_box in zip(image_bytes, crop_boxes)
+                )
             )
         else:
             _raise_if_crop_inputs_present(request=request)
@@ -98,13 +122,9 @@ class TritonPythonModel:
         return pb_utils.InferenceResponse([pb_utils.Tensor(_EMBEDDING_OUTPUT, stacked)])
 
     async def _infer_one_image(self, image_path, crop_box):
-        x, y, width, height = crop_box if crop_box is not None else (_NO_CROP,) * 4
         inputs = [
             pb_utils.Tensor(_IMAGE_PATH_INPUT, _path_to_bytes(image_path)),
-            pb_utils.Tensor(_CROP_X_INPUT, _scalar_int64(x)),
-            pb_utils.Tensor(_CROP_Y_INPUT, _scalar_int64(y)),
-            pb_utils.Tensor(_CROP_WIDTH_INPUT, _scalar_int64(width)),
-            pb_utils.Tensor(_CROP_HEIGHT_INPUT, _scalar_int64(height)),
+            *_crop_tensors(crop_box),
         ]
         infer_req = pb_utils.InferenceRequest(
             model_name="_mobileclip_s0_image_pipeline",
@@ -124,11 +144,27 @@ class TritonPythonModel:
         ).as_numpy()
         return embedding[0]
 
-    async def _infer_one_image_bytes(self, value):
+    async def _fetch_url_images(self, image_paths):
+        """Fetch the image behind every URL among the paths. Map each URL to its bytes."""
+        try:
+            urls = [path for path in image_paths if is_url(path)]
+            return await asyncio.to_thread(
+                fetch_urls,
+                urls,
+                timeout_seconds=self._fetch_timeout_seconds,
+                max_workers=self._fetch_workers,
+            )
+        except (ValueError, ImageFetchError) as error:
+            raise pb_utils.TritonModelException(str(error)) from None
+
+    async def _infer_one_image_bytes(self, value, crop_box):
         infer_req = pb_utils.InferenceRequest(
             model_name="_mobileclip_s0_image_bytes_pipeline",
             requested_output_names=[_INTERNAL_EMBEDDING_OUTPUT],
-            inputs=[pb_utils.Tensor(_IMAGE_BYTES_INPUT, _bytes_to_tensor(value))],
+            inputs=[
+                pb_utils.Tensor(_IMAGE_BYTES_INPUT, _bytes_to_tensor(value)),
+                *_crop_tensors(crop_box),
+            ],
             preferred_memory=pb_utils.PreferredMemory(
                 pb_utils.TRITONSERVER_MEMORY_CPU,
                 0,
@@ -161,6 +197,16 @@ class TritonPythonModel:
             result, _INTERNAL_EMBEDDING_OUTPUT
         ).as_numpy()
         return embedding[0]
+
+
+def _crop_tensors(crop_box):
+    x, y, width, height = crop_box if crop_box is not None else (_NO_CROP,) * 4
+    return [
+        pb_utils.Tensor(_CROP_X_INPUT, _scalar_int64(x)),
+        pb_utils.Tensor(_CROP_Y_INPUT, _scalar_int64(y)),
+        pb_utils.Tensor(_CROP_WIDTH_INPUT, _scalar_int64(width)),
+        pb_utils.Tensor(_CROP_HEIGHT_INPUT, _scalar_int64(height)),
+    ]
 
 
 def _path_to_bytes(path):
@@ -223,5 +269,5 @@ def _raise_if_crop_inputs_present(request):
     crop_names = (_CROP_X_INPUT, _CROP_Y_INPUT, _CROP_WIDTH_INPUT, _CROP_HEIGHT_INPUT)
     if any(pb_utils.get_input_tensor_by_name(request, name) is not None for name in crop_names):
         raise pb_utils.TritonModelException(
-            f"Crop inputs are only supported with {_IMAGE_PATH_INPUT}."
+            f"Crop inputs go with {_IMAGE_PATH_INPUT} or {_IMAGE_BYTES_INPUT}, not {_TEXT_INPUT}."
         )
