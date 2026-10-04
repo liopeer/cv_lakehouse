@@ -13,6 +13,7 @@ import dagster as dg
 
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST, BronzeManifest, BronzeMode
 from lakehouse_core.lake_resource import LakeResource
+from lakehouse_core.lake_store import require_local
 from lakehouse_core.manifest_files import write_manifest
 from lakehouse_core.published_files import (
     download_published_files,
@@ -59,23 +60,24 @@ def build_bronze_asset(source: PublishedSource[BronzeManifest]) -> dg.AssetsDefi
         lake: LakeResource,
     ) -> dg.MaterializeResult:
         bronze_dir = lake.paths.bronze_dir(name)
+        local_dir = require_local(path=bronze_dir, purpose="Bronze")
         if config.source_dir is not None:
             source_dir = Path(config.source_dir).expanduser().resolve()
             context.log.info(f"Mapping {name} to {source_dir}")
-            _create_symlink(source_dir=source_dir, target=bronze_dir)
+            _create_symlink(source_dir=source_dir, target=local_dir)
             mode = BronzeMode.LINK
         else:
-            bronze_dir.mkdir(parents=True, exist_ok=True)
+            local_dir.mkdir(parents=True, exist_ok=True)
             download_published_files(
                 published_files=publication.published_files,
-                bronze_dir=bronze_dir,
+                bronze_dir=local_dir,
                 workers=lake.download_workers,
                 timeout=lake.request_timeout_seconds,
                 log=context.log,
             )
             mode = BronzeMode.DOWNLOAD
         reject_incomplete_copy(
-            bronze_dir=bronze_dir, published_files=publication.published_files
+            bronze_dir=local_dir, published_files=publication.published_files
         )
 
         base = BronzeManifest(
@@ -84,7 +86,7 @@ def build_bronze_asset(source: PublishedSource[BronzeManifest]) -> dg.AssetsDefi
             homepage=publication.homepage,
             license=publication.license,
             commercial_use=publication.commercial_use,
-            path=str(bronze_dir),
+            path=lake.store.location(bronze_dir),
             published_files=list(publication.published_files),
         )
         manifest = source.describe_bronze_copy(bronze_dir=bronze_dir, base=base)

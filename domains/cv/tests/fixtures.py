@@ -11,6 +11,7 @@ required path that holds no test data is an empty stand-in, so each copy is comp
 from pathlib import Path
 
 from PIL import Image as PILImage
+from upath import UPath
 
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 
@@ -65,7 +66,7 @@ def complete_with_stand_ins(root: Path, name: str) -> Path:
     return root
 
 
-def make_pp4av(root: Path) -> Path:
+def make_pp4av(root: Path) -> UPath:
     """PP4AV, as its Hugging Face repository unpacks."""
     for city in ("zurich", "fisheye"):
         _image(path=root / "data" / "images" / city / "a.png", size=(200, 100))
@@ -80,10 +81,10 @@ def make_pp4av(root: Path) -> Path:
     (soiling / "a.txt").write_text(
         "0 0.5 0.5 0.1 0.2\n0 0.1 0.1 0.1 0.1\n1 0.25 0.5 0.5 0.5\n"
     )
-    return complete_with_stand_ins(root=root, name="pp4av")
+    return UPath(complete_with_stand_ins(root=root, name="pp4av"))
 
 
-def make_wider_face(root: Path) -> Path:
+def make_wider_face(root: Path) -> UPath:
     """WIDER FACE, with the zero count block and an annotator rejected box."""
     for event, name in (
         ("0--Parade", "a.jpg"),
@@ -97,10 +98,10 @@ def make_wider_face(root: Path) -> Path:
     split.mkdir(parents=True)
     (split / "wider_face_train_bbx_gt.txt").write_text(WIDER_GT_TRAIN)
     (split / "wider_face_val_bbx_gt.txt").write_text(WIDER_GT_VAL)
-    return complete_with_stand_ins(root=root, name="wider_face")
+    return UPath(complete_with_stand_ins(root=root, name="wider_face"))
 
 
-def make_open_images(root: Path) -> Path:
+def make_open_images(root: Path) -> UPath:
     """Open Images. Bronze keeps every class, so the CSV holds a non PII row too."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "validation-annotations-bbox.csv").write_text(
@@ -151,7 +152,7 @@ def make_open_images(root: Path) -> Path:
     _image(path=root / "validation" / "aaa.jpg", size=(100, 200))
     _image(path=root / "test" / "ccc.jpg", size=(50, 50))
     _image(path=root / "train_d" / "d1e.jpg", size=(40, 40))
-    return complete_with_stand_ins(root=root, name="open_images")
+    return UPath(complete_with_stand_ins(root=root, name="open_images"))
 
 
 BUILDERS = {
@@ -161,6 +162,6 @@ BUILDERS = {
 }
 
 
-def make_all(root: Path) -> dict[str, Path]:
+def make_all(root: Path) -> dict[str, UPath]:
     """Build every dataset under its own directory and return the paths."""
     return {name: build(root / name) for name, build in BUILDERS.items()}

@@ -14,11 +14,13 @@ A release holds no vector. The vectors stay in silver, and silver moves on.
 from __future__ import annotations
 
 import hashlib
-import shutil
 import stat
 from datetime import datetime
-from pathlib import Path
 
+from upath import UPath
+
+from lakehouse_core.lake_files import copy_file, move_tree, remove_tree
+from lakehouse_core.lake_store import is_local
 from lakehouse_core.manifest_files import read_manifest, write_manifest
 from lakehouse_cv.contract.gold_tables import gold_boxes_file, gold_images_file
 from lakehouse_cv.contract.manifests import (
@@ -67,7 +69,7 @@ def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManif
     # A release takes its final name when it is complete, so a run that fails leaves
     # no release behind.
     staging_dir = release_dir.with_name(f".{release_dir.name}.staging")
-    shutil.rmtree(path=staging_dir, ignore_errors=True)
+    remove_tree(staging_dir)
 
     version_dir = paths.gold_version_dir(gold.version)
     datasets: list[GoldDataset] = []
@@ -82,9 +84,10 @@ def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManif
                 names = {"dataset": dataset.dataset, "split": split.split}
                 source = gold_file(version_dir=version_dir, **names)
                 target = gold_file(version_dir=staging_dir, **names)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src=source, dst=target)
-                target.chmod(_READ_ONLY)
+                copy_file(source=source, target=target)
+                # An object store has no file modes.
+                if is_local(target):
+                    target.chmod(_READ_ONLY)
                 files.append(
                     ReleaseFile(
                         path=target.relative_to(staging_dir).as_posix(),
@@ -93,12 +96,12 @@ def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManif
                     )
                 )
     if not files:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+        remove_tree(staging_dir)
         raise RuntimeError("Gold holds no val and no test split to release.")
     if numbers and _pin_files(files) == _pin_files(
         read_release_manifest(paths=paths, release=numbers[-1]).files
     ):
-        shutil.rmtree(staging_dir)
+        remove_tree(staging_dir)
         raise IdenticalReleaseError(
             f"The val and test rows are those of release {numbers[-1]}. A new release "
             "would hold the same files."
@@ -113,7 +116,7 @@ def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManif
         files=files,
     )
     write_manifest(path=staging_dir / RELEASE_MANIFEST, manifest=manifest)
-    staging_dir.rename(release_dir)
+    move_tree(source=staging_dir, target=release_dir)
     return manifest
 
 
@@ -129,7 +132,7 @@ def find_changed_release_files(paths: CvLakePaths) -> list[str]:
     return changed
 
 
-def compute_sha256(path: Path) -> str:
+def compute_sha256(path: UPath) -> str:
     digest = hashlib.sha256()
     with path.open(mode="rb") as handle:
         while chunk := handle.read(READ_CHUNK_SIZE):

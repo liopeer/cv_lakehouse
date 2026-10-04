@@ -38,6 +38,7 @@ FROM python:3.12-slim-bookworm AS runtime
 # The lake is mounted at /lake. The Triton server resolves the image paths that silver
 # sends, so it mounts the lake at the same path.
 ENV PATH=/opt/venv/bin:$PATH \
+    DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions \
     PYTHONPATH=/cv_lakehouse/packages/lakehouse_core/src:/cv_lakehouse/domains/cv/src \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -46,6 +47,9 @@ ENV PATH=/opt/venv/bin:$PATH \
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin lakehouse
 
 COPY --from=builder --chown=10001:10001 /opt/venv /opt/venv
+
+# DuckDB reads a lake on S3 with httpfs. Installed here, a run never downloads it.
+RUN python -c "import duckdb; duckdb.connect(config={'extension_directory': '$DUCKDB_EXTENSION_DIRECTORY'}).install_extension('httpfs')"
 
 # `load_from_defs_folder` finds the project root by the pyproject.toml above it, so the
 # file comes along with the source.

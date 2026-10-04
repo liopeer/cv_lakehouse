@@ -26,6 +26,7 @@ from pathlib import Path
 
 import httpx
 from pydantic import BaseModel, ConfigDict
+from upath import UPath
 
 ARCHIVE_SUFFIXES = (".tar.gz", ".zip")
 PARTIAL_SUFFIX = ".partial"
@@ -101,7 +102,7 @@ def reject_incomplete_copy(
         )
 
 
-def compute_checksum(path: Path, kind: ChecksumKind) -> str:
+def compute_checksum(path: Path | UPath, kind: ChecksumKind) -> str:
     if kind is ChecksumKind.S3_ETAG:
         return _compute_s3_etag(path)
     digest = hashlib.sha256() if kind is ChecksumKind.SHA256 else hashlib.md5()
@@ -243,13 +244,13 @@ def _verify(path: Path, published_file: PublishedFile) -> None:
         )
 
 
-def _read_chunks(path: Path, size: int) -> Iterator[bytes]:
+def _read_chunks(path: Path | UPath, size: int) -> Iterator[bytes]:
     with path.open(mode="rb") as handle:
         while chunk := handle.read(size):
             yield chunk
 
 
-def _compute_s3_etag(path: Path) -> str:
+def _compute_s3_etag(path: Path | UPath) -> str:
     part_digests = [
         hashlib.md5(part).digest()
         for part in _read_chunks(path=path, size=S3_PART_SIZE)

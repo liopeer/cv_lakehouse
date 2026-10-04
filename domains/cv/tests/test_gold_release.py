@@ -45,7 +45,13 @@ def gold_lake(lake: CvLakeResource, bronze_sources: dict[str, Path]) -> CvLakeRe
 
 
 def _build_gold(lake: CvLakeResource) -> None:
-    build_gold_version(paths=lake.paths, specs=SPECS, code_version="test", built_at=NOW)
+    build_gold_version(
+        store=lake.store,
+        paths=lake.paths,
+        specs=SPECS,
+        code_version="test",
+        built_at=NOW,
+    )
 
 
 def _move_the_wider_face_val_box(lake: CvLakeResource) -> None:
@@ -162,7 +168,7 @@ def test_the_asset_publishes_a_release_and_refuses_an_equal_one(
 
 
 def test_the_api_serves_the_frozen_rows_of_a_release(gold_lake: CvLakeResource) -> None:
-    client = TestClient(create_app(gold_lake.paths))
+    client = TestClient(create_app(gold_lake.store))
     write_eval_release(paths=gold_lake.paths, created_at=NOW)
     _move_the_wider_face_val_box(gold_lake)
 
@@ -179,7 +185,7 @@ def test_the_api_serves_the_frozen_rows_of_a_release(gold_lake: CvLakeResource) 
 
 
 def test_a_request_for_eval_rows_must_name_a_release(gold_lake: CvLakeResource) -> None:
-    client = TestClient(create_app(gold_lake.paths))
+    client = TestClient(create_app(gold_lake.store))
 
     assert client.get("/v1/boxes").status_code == 400
     assert client.get(url="/v1/boxes", params={"role": "val"}).status_code == 400
@@ -194,7 +200,7 @@ def test_a_request_for_eval_rows_must_name_a_release(gold_lake: CvLakeResource) 
 def test_a_release_joins_the_train_rows_of_the_current_gold(
     gold_lake: CvLakeResource,
 ) -> None:
-    client = TestClient(create_app(gold_lake.paths))
+    client = TestClient(create_app(gold_lake.store))
     write_eval_release(paths=gold_lake.paths, created_at=NOW)
 
     rows = client.get(url="/v1/boxes", params={"release": "1"}).json()["rows"]
@@ -204,7 +210,7 @@ def test_a_release_joins_the_train_rows_of_the_current_gold(
 
 
 def test_a_release_holds_no_vector(gold_lake: CvLakeResource) -> None:
-    client = TestClient(create_app(gold_lake.paths))
+    client = TestClient(create_app(gold_lake.store))
     write_eval_release(paths=gold_lake.paths, created_at=NOW)
 
     assert client.get(url="/v1/embeddings", params={"release": "1"}).status_code == 400

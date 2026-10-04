@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 from collections.abc import Iterable, Iterator
-from pathlib import Path
 
 from labelformat.model.bounding_box import BoundingBox, BoundingBoxFormat
 from labelformat.model.category import Category
@@ -22,6 +21,7 @@ from labelformat.model.object_detection import (
     ObjectDetectionInput,
     SingleObjectDetection,
 )
+from upath import UPath
 
 from lakehouse_core.published_files import (
     Checksum,
@@ -130,12 +130,12 @@ class WiderFaceSource(BronzeSource, BoxAttributeSource):
     spec = SPEC
     published_files = PUBLISHED_FILES
 
-    def image_root(self, bronze_dir: Path, split: str) -> Path:
+    def image_root(self, bronze_dir: UPath, split: str) -> UPath:
         _check_split(split)
         return bronze_dir / f"WIDER_{split}" / "images"
 
     def open_labelformat_reader(
-        self, bronze_dir: Path, split: str
+        self, bronze_dir: UPath, split: str
     ) -> ObjectDetectionInput:
         """The labelformat view, which drops the boxes the annotators rejected.
 
@@ -149,7 +149,7 @@ class WiderFaceSource(BronzeSource, BoxAttributeSource):
             annotation_file=_annotation_file(bronze_dir=bronze_dir, split=split),
         )
 
-    def read_raw_images(self, bronze_dir: Path, split: str) -> Iterator[RawImage]:
+    def read_raw_images(self, bronze_dir: UPath, split: str) -> Iterator[RawImage]:
         """Read every box, with the five grades and the reject flag alongside it.
 
         A rejected region is face-like but unusable as a positive. Dropping it labels
@@ -176,7 +176,7 @@ class WiderFaceObjectDetectionInput(ObjectDetectionInput):
     `x1 y1 w h blur expression illumination invalid occlusion pose`.
     """
 
-    def __init__(self, image_root: Path, annotation_file: Path) -> None:
+    def __init__(self, image_root: UPath, annotation_file: UPath) -> None:
         self.image_root = image_root
         self.annotation_file = annotation_file
 
@@ -230,7 +230,7 @@ def _build_raw_box(row: list[int]) -> RawBox:
 
 
 def _read_annotation_blocks(
-    annotation_file: Path,
+    annotation_file: UPath,
 ) -> Iterable[tuple[str, list[list[int]]]]:
     lines = annotation_file.read_text().splitlines()
     position = 0
@@ -251,7 +251,7 @@ def _read_annotation_blocks(
         yield filename, rows if count else []
 
 
-def _annotation_file(bronze_dir: Path, split: str) -> Path:
+def _annotation_file(bronze_dir: UPath, split: str) -> UPath:
     return bronze_dir / "wider_face_split" / f"wider_face_{split}_bbx_gt.txt"
 
 

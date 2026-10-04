@@ -5,8 +5,9 @@
 """The contract between a domain's source and the bronze asset of core."""
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
+
+from upath import UPath
 
 from lakehouse_core.bronze_manifest import BronzeManifest
 from lakehouse_core.published_files import PublishedFile
@@ -30,6 +31,6 @@ class PublishedSource[M: BronzeManifest](Protocol):
     @property
     def publication(self) -> Publication: ...
 
-    def describe_bronze_copy(self, *, bronze_dir: Path, base: BronzeManifest) -> M:
+    def describe_bronze_copy(self, *, bronze_dir: UPath, base: BronzeManifest) -> M:
         """Add the domain fields to `base`. Raise if the copy holds nothing usable."""
         ...

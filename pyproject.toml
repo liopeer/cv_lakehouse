@@ -8,6 +8,7 @@ dev = [
     "dagster-dg-cli",
     "dagster-webserver",
     "licenseheaders>=0.8.8",
+    "moto[server]>=5.1",
     "pyrefly>=1.2.0",
     "pytest>=9.1.1",
     "ruff>=0.16.6",

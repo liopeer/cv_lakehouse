@@ -4,9 +4,8 @@
 #
 """Settings and path layout for the CV lake."""
 
-from pathlib import Path
-
 from pydantic_settings import SettingsConfigDict
+from upath import UPath
 
 from lakehouse_core.lake_paths import LakePaths
 from lakehouse_core.lake_settings import LakeSettings
@@ -37,11 +36,11 @@ class CvSettings(LakeSettings):
 class CvLakePaths(LakePaths):
     """Add the directories that only the CV lake has."""
 
-    def corrections_dir(self, name: str) -> Path:
+    def corrections_dir(self, name: str) -> UPath:
         return self.root / "bronze" / f"{name}_corrections"
 
-    def gold_version_dir(self, version: int) -> Path:
+    def gold_version_dir(self, version: int) -> UPath:
         return self.gold_dir() / "versions" / str(version)
 
-    def gold_release_dir(self, release: int) -> Path:
+    def gold_release_dir(self, release: int) -> UPath:
         return self.gold_dir() / "releases" / f"{release:04d}"

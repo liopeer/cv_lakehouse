@@ -23,11 +23,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from datetime import datetime
-from pathlib import Path
 
 import httpx
 from pydantic import BaseModel
+from upath import UPath
 
+from lakehouse_core.lake_store import require_local
 from lakehouse_core.published_files import (
     Checksum,
     ChecksumKind,
@@ -72,11 +73,12 @@ def fetch_new_snapshots(
     client: httpx.Client,
     export_url: str,
     dataset: str,
-    corrections_dir: Path,
+    corrections_dir: UPath,
     stored_snapshots: Sequence[CorrectionSnapshot],
     log: logging.Logger,
 ) -> list[CorrectionSnapshot]:
     """Download every snapshot that bronze does not hold. Return all of them."""
+    local_dir = require_local(path=corrections_dir, purpose="Bronze")
     published = list_published_snapshots(
         client=client, export_url=export_url, dataset=dataset
     )
@@ -98,7 +100,7 @@ def fetch_new_snapshots(
         )
         download_published_file(
             published_file=published_file,
-            bronze_dir=corrections_dir,
+            bronze_dir=local_dir,
             client=client,
             log=log,
         )
@@ -117,7 +119,7 @@ def fetch_new_snapshots(
 
 def reject_changed_snapshots(
     *,
-    corrections_dir: Path,
+    corrections_dir: UPath,
     stored_snapshots: Sequence[CorrectionSnapshot],
     published_snapshots: Sequence[PublishedSnapshot],
 ) -> None:

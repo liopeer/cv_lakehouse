@@ -15,6 +15,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 
+from lakehouse_core.lake_store import LakeStore
 from lakehouse_cv.contract.class_registry import CanonicalClass
 from lakehouse_cv.contract.manifests import GoldManifest, ReleaseManifest
 from lakehouse_cv.gold_api.arrow_responses import build_rows_response
@@ -31,11 +32,15 @@ VECTOR_TABLES = (GoldTable.EMBEDDINGS, GoldTable.CROP_EMBEDDINGS)
 
 
 def create_app_from_env() -> FastAPI:
-    return create_app(CvLakePaths(CvSettings().root))
+    settings = CvSettings()
+    return create_app(
+        LakeStore(root=settings.root, storage_options=settings.storage_options)
+    )
 
 
-def create_app(paths: CvLakePaths) -> FastAPI:
+def create_app(store: LakeStore) -> FastAPI:
     app = FastAPI(title="cv_lakehouse gold")
+    paths = CvLakePaths(store.root)
 
     def read_current_manifest() -> GoldManifest:
         manifest = read_gold_manifest(paths)
@@ -76,6 +81,7 @@ def create_app(paths: CvLakePaths) -> FastAPI:
                 detail="A release holds no vector. Ask for `release=draft`.",
             )
         page = read_gold_page(
+            store=store,
             paths=paths,
             manifest=manifest,
             release=release,

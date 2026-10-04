@@ -314,11 +314,21 @@ The API authenticates nothing. Keep it on a private network.
 
 ## Storage
 
-Every path derives from one root. Set it with an environment variable:
+Every path derives from one root. The root is a local directory, or a URL that fsspec
+reads: `s3://`, `gs://`, `az://` or `memory://`. Set it with environment variables:
 
 ```bash
 export CV_LAKEHOUSE_ROOT=/Volumes/data/cv_lakehouse   # defaults to ./data
+export CV_LAKEHOUSE_ROOT=s3://lake/cv
+export CV_LAKEHOUSE_STORAGE_OPTIONS='{"key": "...", "secret": "...", "endpoint_url": "http://seaweedfs:8333"}'
 ```
+
+`CV_LAKEHOUSE_STORAGE_OPTIONS` is JSON, and passes to fsspec as the options of the
+root. DuckDB reads S3 with its httpfs extension, from the same options. A manifest
+stores every location relative to the root, so the lake moves as one tree.
+
+Silver, gold, their checks and the gold API run on any root. Bronze downloads and
+Triton read images only on a local root for now.
 
 ```
 $CV_LAKEHOUSE_ROOT/
@@ -453,6 +463,9 @@ packages/lakehouse_core/src/lakehouse_core/
   published_source.py  the protocol between a source of a domain and bronze
   bronze_asset.py      the bronze asset of any source: download or link, then verify
   bronze_manifest.py   what bronze writes beside a dataset
+  lake_store.py        the root as a UPath, and DuckDB and pyarrow on it
+  lake_files.py        move, copy and remove, also on an object store
+  parquet_files.py     read and write Parquet at any path of the lake
   lake_paths.py        the bronze, silver and gold directories under a root
   lake_settings.py     the settings every domain shares
   lake_resource.py     the Dagster resource with the lake root

@@ -6,14 +6,15 @@
 
 from __future__ import annotations
 
+import posixpath
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from labelformat.model.category import Category
 from labelformat.model.object_detection import ObjectDetectionInput
 from PIL import Image as PILImage
+from upath import UPath
 
 from lakehouse_core.bronze_manifest import BronzeManifest
 from lakehouse_core.published_files import PublishedFile
@@ -68,10 +69,10 @@ class BronzeSource(PublishedSource[CvBronzeManifest], Protocol):
     spec: DatasetSpec
     published_files: tuple[PublishedFile, ...]
 
-    def image_root(self, bronze_dir: Path, split: str) -> Path: ...
+    def image_root(self, bronze_dir: UPath, split: str) -> UPath: ...
 
     def open_labelformat_reader(
-        self, bronze_dir: Path, split: str
+        self, bronze_dir: UPath, split: str
     ) -> ObjectDetectionInput: ...
 
     @property
@@ -86,7 +87,7 @@ class BronzeSource(PublishedSource[CvBronzeManifest], Protocol):
         )
 
     def describe_bronze_copy(
-        self, *, bronze_dir: Path, base: BronzeManifest
+        self, *, bronze_dir: UPath, base: BronzeManifest
     ) -> CvBronzeManifest:
         splits = detect_materialized_splits(source=self, bronze_dir=bronze_dir)
         if not splits:
@@ -96,15 +97,21 @@ class BronzeSource(PublishedSource[CvBronzeManifest], Protocol):
         return CvBronzeManifest(
             **base.model_dump(),
             splits=list(splits),
+            # Under the location of bronze, so the roots move with the lake.
             image_roots={
-                split: str(self.image_root(bronze_dir=bronze_dir, split=split))
+                split: posixpath.join(
+                    base.path,
+                    self.image_root(bronze_dir=bronze_dir, split=split)
+                    .relative_to(bronze_dir)
+                    .as_posix(),
+                )
                 for split in splits
             },
         )
 
 
 def detect_materialized_splits(
-    source: BronzeSource, bronze_dir: Path
+    source: BronzeSource, bronze_dir: UPath
 ) -> tuple[str, ...]:
     """Report the splits that are really on disk, not the splits the source can make."""
     found = []
@@ -127,11 +134,11 @@ class BoxAttributeSource(Protocol):
     reads it instead of `read`. A source without attributes inherits nothing extra.
     """
 
-    def read_raw_images(self, bronze_dir: Path, split: str) -> Iterable[RawImage]: ...
+    def read_raw_images(self, bronze_dir: UPath, split: str) -> Iterable[RawImage]: ...
 
 
 def read_raw_images(
-    source: BronzeSource, bronze_dir: Path, split: str
+    source: BronzeSource, bronze_dir: UPath, split: str
 ) -> Iterable[RawImage]:
     """Read one split as raw images, preferring the attribute carrying path.
 
@@ -169,13 +176,13 @@ def _read_raw_images_from_labelformat(
         )
 
 
-def read_image_size(path: Path) -> tuple[int, int]:
+def read_image_size(path: UPath) -> tuple[int, int]:
     """Read the width and the height from the header, without decoding the pixels."""
-    with PILImage.open(path) as image:
+    with path.open(mode="rb") as handle, PILImage.open(handle) as image:
         return image.width, image.height
 
 
-def iter_image_paths(root: Path) -> Iterable[Path]:
+def iter_image_paths(root: UPath) -> Iterable[UPath]:
     for path in sorted(root.rglob("*")):
         if path.suffix.lower() in IMAGE_SUFFIXES and path.is_file():
             yield path

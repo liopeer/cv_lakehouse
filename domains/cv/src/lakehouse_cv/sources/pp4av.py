@@ -10,9 +10,8 @@ belongs in a test split only.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from labelformat.model.object_detection import ObjectDetectionInput
+from upath import UPath
 
 from lakehouse_core.published_files import (
     Checksum,
@@ -117,12 +116,12 @@ class PP4AVSource(BronzeSource):
     spec = SPEC
     published_files = PUBLISHED_FILES
 
-    def image_root(self, bronze_dir: Path, split: str) -> Path:
+    def image_root(self, bronze_dir: UPath, split: str) -> UPath:
         _check_split(split)
         return bronze_dir / IMAGE_DIR
 
     def open_labelformat_reader(
-        self, bronze_dir: Path, split: str
+        self, bronze_dir: UPath, split: str
     ) -> ObjectDetectionInput:
         _check_split(split)
         return YoloTxtObjectDetectionInput(

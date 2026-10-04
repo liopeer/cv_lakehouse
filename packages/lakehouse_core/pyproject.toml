@@ -6,11 +6,17 @@ description = "The parts of the lakehouse that know no domain: bronze, paths and
 authors = [{ name = "Lionel Peer" }]
 license = "MIT"
 dependencies = [
+    "adlfs>=2024.12",
     "dagster==1.13.21",
+    "duckdb>=1.2.2,<1.6",
+    "fsspec>=2025.1",
+    "gcsfs>=2025.1",
     "httpx>=0.28.1",
     "pyarrow>=17.0.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.15.0",
+    "s3fs>=2025.1",
+    "universal-pathlib>=0.3.10",
 ]
 
 [build-system]

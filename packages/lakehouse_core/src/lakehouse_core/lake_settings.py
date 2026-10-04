@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-from pathlib import Path
+from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +17,9 @@ class LakeSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    root: Path = Path("data")
+    # A local directory, or a URL such as s3://lake/cv. See `LakeStore`.
+    root: str = "data"
+    # The fsspec options of the root, as JSON, such as the endpoint and the keys of S3.
+    storage_options: dict[str, Any] = Field(default_factory=dict)
     download_workers: int = Field(default=16, ge=1, le=64)
     request_timeout_seconds: float = Field(default=60.0, gt=0)

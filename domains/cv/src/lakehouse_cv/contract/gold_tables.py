@@ -14,9 +14,8 @@ annotators rejected, and gold is where they drop out.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pyarrow as pa
+from upath import UPath
 
 from lakehouse_core.table_spec import Layer, TableSpec
 from lakehouse_cv.contract.silver_tables import ATTRIBUTE_COLUMNS, EMBEDDING_COLUMN
@@ -116,9 +115,9 @@ GOLD_TABLES: tuple[TableSpec, ...] = (
 )
 
 
-def gold_images_file(*, version_dir: Path, dataset: str, split: str) -> Path:
+def gold_images_file(*, version_dir: UPath, dataset: str, split: str) -> UPath:
     return version_dir / "images" / dataset / f"{split}.parquet"
 
 
-def gold_boxes_file(*, version_dir: Path, dataset: str, split: str) -> Path:
+def gold_boxes_file(*, version_dir: UPath, dataset: str, split: str) -> UPath:
     return version_dir / "boxes" / dataset / f"{split}.parquet"
