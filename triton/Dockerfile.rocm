@@ -5,8 +5,8 @@
 
 # The ROCm image. The base image in `base/` holds Triton with the ONNX Runtime and Python
 # backends, torch, rocJPEG and rocPyDecode. ONNX Runtime runs the encoders through its
-# MIGraphX execution provider. A Python model decodes JPEGs on the GPU with rocJPEG and
-# resizes them with torchvision.
+# MIGraphX execution provider. A Python model decodes the images with Pillow and resizes
+# them with torchvision, on the CPU.
 #
 # The image holds no weights. `entrypoint.sh` exports both encoders to ONNX on the first
 # start and caches them in /cache, together with the programs that MIGraphX compiles.
@@ -15,9 +15,13 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /opt/mobileclip
 
+# glibc gives each thread of tritonserver its own heap and keeps the freed memory. With
+# hundreds of threads, that held 3.9GB on an idle server.
+ENV MALLOC_ARENA_MAX=2
+
 # requirements-rocm.txt pins every package with its hash, and `make lock` writes it. It
 # leaves out the packages of the base image. shared_deps goes in on its own with
-# --no-deps, which skips pillow-simd. The CPU fallback of the image decoder uses the
+# --no-deps, which skips pillow-simd. The image preprocessing uses the
 # pillow of the base image.
 COPY requirements-rocm.txt /opt/mobileclip/
 RUN pip3 install --no-cache-dir --no-deps --require-hashes -r requirements-rocm.txt

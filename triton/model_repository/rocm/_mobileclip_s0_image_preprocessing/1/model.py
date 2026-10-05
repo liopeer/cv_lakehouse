@@ -3,7 +3,7 @@
 # Copyright (c) 2025–2026 Lionel Peer
 #
 
-# GPU image preprocessing for the ROCm image, in place of the DALI models. The
+# CPU image preprocessing for the ROCm image, in place of the DALI models. The
 # `input_kind` parameter picks IMAGE_PATH or IMAGE_BYTES. Both take the CROP_* inputs.
 # `_mobileclip_s0_image_bytes_preprocessing` links to this file.
 #
@@ -13,11 +13,7 @@ import json
 import torch
 import triton_python_backend_utils as pb_utils
 
-from shared_deps.mobileclip_rocm_preprocessing import (
-    NO_CROP,
-    MobileCLIPImageDecoder,
-    preprocess_images,
-)
+from shared_deps.mobileclip_rocm_preprocessing import MobileCLIPImagePreprocessor
 
 _INPUT_KIND_PARAMETER = "input_kind"
 _DECODE_THREADS_PARAMETER = "decode_threads"
@@ -34,9 +30,7 @@ class TritonPythonModel:
             raise pb_utils.TritonModelException(
                 f"{_INPUT_KIND_PARAMETER} must be 'path' or 'bytes'."
             )
-        self._device = torch.device("cuda", int(args["model_instance_device_id"]))
-        self._decoder = MobileCLIPImageDecoder(
-            device=self._device,
+        self._preprocessor = MobileCLIPImagePreprocessor(
             decode_threads=int(parameters[_DECODE_THREADS_PARAMETER]["string_value"]),
         )
 
@@ -51,8 +45,9 @@ class TritonPythonModel:
             request_sizes.append(len(request_encoded))
 
         with torch.inference_mode():
-            images = self._decoder.decode_images(encoded_images)
-            batch = preprocess_images(images=images, crop_boxes=crop_boxes).cpu().numpy()
+            batch = self._preprocessor.preprocess_images(
+                encoded_images=encoded_images, crop_boxes=crop_boxes
+            ).numpy()
 
         responses = []
         offset = 0
@@ -63,7 +58,7 @@ class TritonPythonModel:
         return responses
 
     def finalize(self):
-        self._decoder.close()
+        self._preprocessor.close()
 
     def _read_request(self, request):
         if self._input_kind == "bytes":
