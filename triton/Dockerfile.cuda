@@ -24,7 +24,7 @@ RUN pip3 install --no-cache-dir --no-deps --require-hashes -r requirements-cuda.
 COPY shared_deps_server/ /opt/mobileclip/shared_deps_server/
 RUN pip3 install --no-cache-dir --no-deps ./shared_deps_server/
 
-COPY model_repository/common/ model_repository/cuda/ /models/
+COPY model_repository/cuda/ /models/
 COPY dali_pipeline.py entrypoint.sh version.txt /opt/mobileclip/
 
 ENTRYPOINT ["/opt/mobileclip/entrypoint.sh"]

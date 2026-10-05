@@ -4,6 +4,4 @@
 
 open-clip-torch>=2.20
 timm>=0.9.5
-onnx>=1.16
-onnxscript>=0.1
 huggingface_hub>=0.34

@@ -5,8 +5,8 @@ Copyright (c) 2025–2026 Lionel Peer
 # MobileCLIP-S0 on Triton
 
 The embedding server that silver calls. It serves the MobileCLIP-S0 image and text
-encoders, and it does the image preprocessing on the GPU. It comes as two images with the
-same interface: one for NVIDIA GPUs and one for AMD GPUs.
+encoders. It comes as two images with the same interface: one for NVIDIA GPUs and one for
+AMD GPUs.
 
 The CUDA image runs TensorRT FP16 engines and DALI:
 
@@ -16,19 +16,23 @@ IMAGE_BYTES -> DALI: decode, resize, normalise       -> TensorRT image encoder -
 TEXT        -> CPU tokenisation (Python backend)     -> TensorRT text encoder  -> EMBEDDING
 ```
 
-The ROCm image runs ONNX Runtime with its MIGraphX execution provider. It has no DALI, so
-a Python model decodes with Pillow on the CPU and resizes with torchvision on the GPU:
+The ROCm image runs one Python model in torch. Triton does not see the GPU. torch in the
+Python stub drives it:
 
 ```text
-IMAGE_PATH  -> Pillow + torchvision: decode, crop, resize, normalise -> ONNX image encoder -> EMBEDDING
-IMAGE_BYTES -> Pillow + torchvision: decode, resize, normalise       -> ONNX image encoder -> EMBEDDING
-TEXT        -> CPU tokenisation (Python backend)                     -> ONNX text encoder  -> EMBEDDING
+IMAGE_PATH  -> read or fetch, Pillow + torchvision on CPU threads: decode, crop, resize -> torch.compile image encoder -> EMBEDDING
+IMAGE_BYTES -> Pillow + torchvision on CPU threads: decode, crop, resize                 -> torch.compile image encoder -> EMBEDDING
+TEXT        -> tokenisation                                                             -> torch.compile text encoder  -> EMBEDDING
 ```
 
-The decode runs over a thread pool. The `decode_threads` parameter of
-`_mobileclip_s0_image_preprocessing` sets its size, and it defaults to 4. AMD's torchvision
-carries no libjpeg, so Pillow decodes instead. The two images resize with different code,
-so their embeddings differ slightly.
+The model reads each distinct path or URL once, and decodes it once for all its crops. A
+large JPEG decodes at 1/2, 1/4 or 1/8 scale, so each crop keeps 256 pixels or more. The
+GPU embeds batches of 64 while the threads preprocess the next crops. So no image passes
+between processes, and a request holds at most one full image per thread.
+
+The parameters of `mobileclip_s0` tune it: `batch_size`, 64 by default, `workers`, 16 by
+default, and `fetch_timeout_seconds`, 60 by default. The two images resize with different
+code, so their embeddings differ slightly.
 
 Text tokenisation has no DALI equivalent, so it runs on the CPU before the text encoder.
 
@@ -81,16 +85,16 @@ every other pin. `make lock UPGRADE=--upgrade` moves every pin to its newest ver
 ## Models
 
 The images hold no weights. The first start downloads the MobileCLIP-S0 checkpoint and
-builds the models. Then it deletes the checkpoint.
+builds the models. The CUDA image then deletes the checkpoint.
 
 - The CUDA image builds the image and text TensorRT engines, and serializes the two DALI
   pipelines. That takes several minutes.
-- The ROCm image exports the two encoders to ONNX. Then Triton loads them, and MIGraphX
-  compiles a program for each batch size of 1, 2, 4 and so on up to 64. That takes about
-  30 minutes on a Radeon RX 7900 XTX. A restart then takes seconds.
+- The ROCm image keeps the checkpoint, which torch loads. Each instance compiles both
+  encoders with torch.compile when it loads. That takes under a minute on a Radeon RX
+  7900 XTX, and a restart reuses the compiled kernels.
 
 The models go to the `/cache` volume, under the image version, the platform and the GPU
-architecture. The ROCm image also keeps the compiled MIGraphX programs there. A restart
+architecture. The ROCm image also keeps the kernels of torch.compile there. A restart
 reuses them. A new release or a different GPU builds again. A model only runs on the GPU
 architecture and the library versions that built it, so CI cannot build one.
 
@@ -128,12 +132,11 @@ One request carries many items. The entry model fans them out as concurrent sub-
 so the dynamic batchers on the encoder and preprocessing models coalesce them into one
 execution. `cv_lakehouse.embeddings` is the client.
 
-`mobileclip_s0` is the only model to call. Every other model in `model_repository` starts
+`mobileclip_s0` is the only model to call. In the CUDA image, every other model starts
 with an underscore, because it is a step that `mobileclip_s0` reaches through. Triton
 loads and serves them all, so the underscore is a convention, not a rule it enforces.
 
-Two parameters of `mobileclip_s0` tune the fetch: `fetch_workers`, 32 by default, and
-`fetch_timeout_seconds`, 60 by default.
+Two parameters of the CUDA `mobileclip_s0` tune the fetch: `fetch_workers`, 32 by
+default, and `fetch_timeout_seconds`, 60 by default.
 
-`model_repository/common` holds the models that both images share. `model_repository/cuda`
-and `model_repository/rocm` hold the encoders and the image preprocessing of each image.
+`model_repository/cuda` and `model_repository/rocm` hold the models of each image.
