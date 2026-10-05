@@ -8,7 +8,7 @@
 #
 # The image holds no weights. `entrypoint.sh` downloads the checkpoint on the first start
 # and caches it in /cache, together with the kernels that torch.compile builds.
-ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:rocm-r25.12-20260919@sha256:81ac8e71f0d01e9d88599de62d58163da9550d83f222e679f04e7eda0d289ab6
+ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:rocm-r25.12-20261005@sha256:0c968b8c53eecb2c7ad3d9e5e3100e56eb5e8c6a434b4c7c394205b9ff419666
 FROM ${BASE_IMAGE}
 
 WORKDIR /opt/mobileclip
