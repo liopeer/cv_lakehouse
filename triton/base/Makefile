@@ -53,8 +53,7 @@ lock:  ## Compile the requirements-*.txt lock files.
 		--extra-index-url https://download.pytorch.org/whl/cpu \
 		--extra-index-url https://pypi.nvidia.com
 	$(UV_COMPILE) requirements-rocm.in -o requirements-rocm.txt \
-		--find-links https://repo.radeon.com/rocm/manylinux/rocm-rel-$(ROCM_VERSION)/ \
-		--no-emit-package triton
+		--extra-index-url https://download.pytorch.org/whl/rocm7.2
 
 clean:  ## Remove the local build cache and the dev tags.
 	-docker image rm $(IMAGE):cuda-dev $(IMAGE):rocm-dev

@@ -45,7 +45,7 @@ def fetch_urls(
         return {}
     with ThreadPoolExecutor(max_workers=min(max_workers, len(distinct))) as pool:
         bodies = pool.map(
-            lambda url: _fetch(url=url, timeout_seconds=timeout_seconds), distinct
+            lambda url: fetch_url(url=url, timeout_seconds=timeout_seconds), distinct
         )
         return dict(zip(distinct, bodies, strict=True))
 
@@ -56,7 +56,8 @@ def redact_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
-def _fetch(*, url: str, timeout_seconds: float) -> bytes:
+def fetch_url(*, url: str, timeout_seconds: float) -> bytes:
+    """Fetch the body of one URL."""
     try:
         with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
             return response.read()

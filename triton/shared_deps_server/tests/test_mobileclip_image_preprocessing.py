@@ -10,11 +10,11 @@ import torch
 from PIL import Image
 
 from shared_deps.mobileclip_image_encoder import MobileCLIPPreprocessor
-from shared_deps.mobileclip_rocm_preprocessing import (
+from shared_deps.mobileclip_image_preprocessing import (
     IMAGE_SIZE,
     NO_CROP,
-    MobileCLIPImagePreprocessor,
     crop_image,
+    preprocess_crops,
     reduce_jpeg_decoding,
 )
 
@@ -34,67 +34,37 @@ def _encode_image(
     return buffer.getvalue()
 
 
-@pytest.fixture
-def preprocessor() -> MobileCLIPImagePreprocessor:
-    return MobileCLIPImagePreprocessor(decode_threads=4)
-
-
-def _encode_solid_image(*, width: int, height: int, value: int, image_format: str) -> bytes:
-    buffer = io.BytesIO()
-    Image.new("RGB", (width, height), (value,) * 3).save(buffer, format=image_format)
-    return buffer.getvalue()
-
-
-class TestMobileCLIPImagePreprocessor:
+class TestPreprocessCrops:
     @pytest.mark.parametrize("image_format", ["JPEG", "PNG"])
-    def test_preprocesses_to_a_float32_batch(self, preprocessor, image_format):
+    def test_preprocesses_to_chw_uint8(self, image_format):
         encoded = _encode_image(width=400, height=300, image_format=image_format)
 
-        batch = preprocessor.preprocess_images(
-            encoded_images=[encoded], crop_boxes=[_FULL_IMAGE]
-        )
+        (crop,) = preprocess_crops(encoded, [_FULL_IMAGE])
 
-        assert batch.shape == (1, 3, IMAGE_SIZE, IMAGE_SIZE)
-        assert batch.dtype == torch.float32
-        assert 0.0 <= batch.min() and batch.max() <= 1.0
+        assert crop.shape == (3, IMAGE_SIZE, IMAGE_SIZE)
+        assert crop.dtype == torch.uint8
 
-    def test_preprocesses_a_progressive_jpeg(self, preprocessor):
+    def test_preprocesses_a_progressive_jpeg(self):
         encoded = _encode_image(
             width=40, height=30, image_format="JPEG", progressive=True
         )
 
-        batch = preprocessor.preprocess_images(
-            encoded_images=[encoded], crop_boxes=[_FULL_IMAGE]
+        (crop,) = preprocess_crops(encoded, [_FULL_IMAGE])
+
+        assert crop.shape == (3, IMAGE_SIZE, IMAGE_SIZE)
+
+    def test_returns_one_crop_per_box_in_order(self):
+        pixels = np.zeros((300, 400, 3), dtype=np.uint8)
+        pixels[:, 200:] = 255
+        buffer = io.BytesIO()
+        Image.fromarray(pixels).save(buffer, format="PNG")
+
+        left, right = preprocess_crops(
+            buffer.getvalue(), [(0, 0, 200, 300), (200, 0, 200, 300)]
         )
 
-        assert batch.shape == (1, 3, IMAGE_SIZE, IMAGE_SIZE)
-
-    def test_keeps_the_order_of_a_large_batch(self, preprocessor):
-        # A batch of this size faulted the GPU decoder that this path replaced.
-        encoded = [
-            _encode_solid_image(
-                width=8 + index,
-                height=16 + index,
-                value=index * 2,
-                image_format="JPEG" if index % 2 else "PNG",
-            )
-            for index in range(128)
-        ]
-
-        batch = preprocessor.preprocess_images(
-            encoded_images=encoded, crop_boxes=[_FULL_IMAGE] * 128
-        )
-
-        means = (batch.mean(dim=(1, 2, 3)) * 255).round()
-        assert (means - torch.arange(128) * 2).abs().max() <= 2
-
-    def test_rejects_a_crop_box_count_that_differs(self, preprocessor):
-        encoded = _encode_image(width=40, height=30, image_format="PNG")
-
-        with pytest.raises(ValueError, match="1 images came with 2 crop boxes"):
-            preprocessor.preprocess_images(
-                encoded_images=[encoded], crop_boxes=[_FULL_IMAGE] * 2
-            )
+        assert left.float().mean() == 0
+        assert right.float().mean() == 255
 
 
 class TestReduceJpegDecoding:
@@ -102,34 +72,47 @@ class TestReduceJpegDecoding:
         encoded = _encode_image(width=2048, height=1536, image_format="JPEG")
 
         with Image.open(io.BytesIO(encoded)) as image:
-            crop_box = reduce_jpeg_decoding(image=image, crop_box=_FULL_IMAGE)
+            crop_boxes = reduce_jpeg_decoding(image=image, crop_boxes=[_FULL_IMAGE])
 
             assert image.size == (512, 384)
-        assert crop_box == _FULL_IMAGE
+        assert crop_boxes == [_FULL_IMAGE]
 
     def test_scales_the_crop_box_with_the_image(self):
         encoded = _encode_image(width=2048, height=1536, image_format="JPEG")
 
         with Image.open(io.BytesIO(encoded)) as image:
-            crop_box = reduce_jpeg_decoding(image=image, crop_box=(400, 300, 1200, 800))
+            crop_boxes = reduce_jpeg_decoding(
+                image=image, crop_boxes=[(400, 300, 1200, 800)]
+            )
 
             assert image.size == (1024, 768)
-        assert crop_box == (200, 150, 600, 400)
+        assert crop_boxes == [(200, 150, 600, 400)]
 
     def test_keeps_a_crop_smaller_than_the_image_size_at_full_scale(self):
         encoded = _encode_image(width=2048, height=1536, image_format="JPEG")
 
         with Image.open(io.BytesIO(encoded)) as image:
-            crop_box = reduce_jpeg_decoding(image=image, crop_box=(10, 20, 300, 200))
+            crop_boxes = reduce_jpeg_decoding(image=image, crop_boxes=[(10, 20, 300, 200)])
 
             assert image.size == (2048, 1536)
-        assert crop_box == (10, 20, 300, 200)
+        assert crop_boxes == [(10, 20, 300, 200)]
+
+    def test_scales_to_the_smallest_crop(self):
+        encoded = _encode_image(width=2048, height=1536, image_format="JPEG")
+
+        with Image.open(io.BytesIO(encoded)) as image:
+            crop_boxes = reduce_jpeg_decoding(
+                image=image, crop_boxes=[_FULL_IMAGE, (400, 300, 1200, 800)]
+            )
+
+            assert image.size == (1024, 768)
+        assert crop_boxes == [_FULL_IMAGE, (200, 150, 600, 400)]
 
     def test_keeps_a_png_at_full_scale(self):
         encoded = _encode_image(width=2048, height=1536, image_format="PNG")
 
         with Image.open(io.BytesIO(encoded)) as image:
-            reduce_jpeg_decoding(image=image, crop_box=_FULL_IMAGE)
+            reduce_jpeg_decoding(image=image, crop_boxes=[_FULL_IMAGE])
 
             assert image.size == (2048, 1536)
 
@@ -166,7 +149,7 @@ class TestMatchesThePilPreprocessor:
         ],
     )
     def test_matches_the_pil_preprocessor(
-        self, tmp_path, preprocessor, width, height, image_format, crop_box
+        self, tmp_path, width, height, image_format, crop_box
     ):
         encoded = _encode_image(width=width, height=height, image_format=image_format)
         path = tmp_path / f"image.{image_format.lower()}"
@@ -175,8 +158,6 @@ class TestMatchesThePilPreprocessor:
             str(path), crop_box=None if crop_box == _FULL_IMAGE else crop_box
         )
 
-        batch = preprocessor.preprocess_images(
-            encoded_images=[encoded], crop_boxes=[crop_box]
-        )
+        (crop,) = preprocess_crops(encoded, [crop_box])
 
-        assert (batch[0] - reference).abs().mean() < 2 / 255
+        assert (crop.float() / 255 - reference).abs().mean() < 2 / 255

@@ -1,0 +1,75 @@
+# One Python model reads, preprocesses and embeds a whole request in torch. Triton does
+# not see the GPU. torch in the stub drives it, so the instances are KIND_CPU, and each
+# instance holds its own copy of the encoders on the GPU.
+name: "mobileclip_s0"
+backend: "python"
+max_batch_size: 0
+parameters {
+  key: "batch_size"
+  value: { string_value: "64" }
+}
+parameters {
+  key: "workers"
+  value: { string_value: "16" }
+}
+parameters {
+  key: "fetch_timeout_seconds"
+  value: { string_value: "60" }
+}
+input [
+  {
+    name: "IMAGE_PATH"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "IMAGE_BYTES"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "TEXT"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "CROP_X"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "CROP_Y"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "CROP_WIDTH"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "CROP_HEIGHT"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+    optional: true
+  }
+]
+output [
+  {
+    name: "EMBEDDING"
+    data_type: TYPE_FP32
+    dims: [ -1, 512 ]
+  }
+]
+instance_group [
+  {
+    kind: KIND_CPU
+    count: 1
+  }
+]

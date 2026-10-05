@@ -3,32 +3,26 @@
 ## Copyright (c) 2025–2026 Lionel Peer
 ##
 
-# The ROCm image. The base image in `base/` holds Triton with the ONNX Runtime and Python
-# backends, torch, rocJPEG and rocPyDecode. ONNX Runtime runs the encoders through its
-# MIGraphX execution provider. A Python model decodes the images with Pillow and resizes
-# them with torchvision, on the CPU.
+# The ROCm image. The base image in `base/` holds Triton with the Python backend, and
+# torch for ROCm. One Python model reads, preprocesses and embeds each request in torch.
 #
-# The image holds no weights. `entrypoint.sh` exports both encoders to ONNX on the first
-# start and caches them in /cache, together with the programs that MIGraphX compiles.
+# The image holds no weights. `entrypoint.sh` downloads the checkpoint on the first start
+# and caches it in /cache, together with the kernels that torch.compile builds.
 ARG BASE_IMAGE=ghcr.io/liopeer/cv_lakehouse-triton-base:rocm-r25.12-20260919@sha256:81ac8e71f0d01e9d88599de62d58163da9550d83f222e679f04e7eda0d289ab6
 FROM ${BASE_IMAGE}
 
 WORKDIR /opt/mobileclip
 
-# glibc gives each thread of tritonserver its own heap and keeps the freed memory. With
-# hundreds of threads, that held 3.9GB on an idle server.
-ENV MALLOC_ARENA_MAX=2
-
 # requirements-rocm.txt pins every package with its hash, and `make lock` writes it. It
 # leaves out the packages of the base image. shared_deps goes in on its own with
-# --no-deps, which skips pillow-simd. The image preprocessing uses the
-# pillow of the base image.
+# --no-deps, which skips pillow-simd. The image preprocessing uses the pillow of the
+# base image.
 COPY requirements-rocm.txt /opt/mobileclip/
 RUN pip3 install --no-cache-dir --no-deps --require-hashes -r requirements-rocm.txt
 COPY shared_deps_server/ /opt/mobileclip/shared_deps_server/
 RUN pip3 install --no-cache-dir --no-deps ./shared_deps_server/
 
-COPY model_repository/common/ model_repository/rocm/ /models/
+COPY model_repository/rocm/ /models/
 COPY entrypoint.sh version.txt /opt/mobileclip/
 
 ENTRYPOINT ["/opt/mobileclip/entrypoint.sh"]

@@ -1,1 +1,0 @@
-../../_mobileclip_s0_image_preprocessing/1/model.py
