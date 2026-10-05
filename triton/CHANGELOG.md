@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.3.0...triton-v0.4.0) (2026-10-05)
+
+
+### Features
+
+* **triton:** run the rocm image on torch with torch.compile ([#42](https://github.com/liopeer/cv_lakehouse/issues/42)) ([48dd400](https://github.com/liopeer/cv_lakehouse/commit/48dd4006d6bc042cab7f7bff944ecc0d2c479145))
+
 ## [0.3.0](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.2.0...triton-v0.3.0) (2026-10-04)
 
 
