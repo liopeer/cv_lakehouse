@@ -34,7 +34,7 @@ from lakehouse_cv.contract.manifests import (
     ReleaseManifest,
 )
 from lakehouse_cv.contract.silver_tables import crop_embeddings_file, embeddings_file
-from lakehouse_cv.gold_api.row_filters import BoxFilter, ImageFilter
+from lakehouse_cv.gold_api.row_filters import BoxFilter, ImageFilter, ImageSelection
 from lakehouse_cv.settings import CvLakePaths
 
 
@@ -135,13 +135,9 @@ def _read_rows(
         return layout.schema.empty_table()
 
     parameters: dict[str, object] = {"gold": gold_files, "limit": row_filter.limit}
-    conditions: list[str] = []
-    if row_filter.changed_since is not None:
-        conditions.append("g.changed_at > cast($changed_since as timestamptz)")
-        parameters["changed_since"] = row_filter.changed_since
-    if row_filter.commercial_use is not None:
-        conditions.append("g.commercial_use = cast($commercial_use as boolean)")
-        parameters["commercial_use"] = row_filter.commercial_use
+    conditions = _build_selection_conditions(
+        selection=row_filter, parameters=parameters
+    )
     if row_filter.after is not None:
         conditions.append(f"g.{layout.key} > cast($after as varchar)")
         parameters["after"] = row_filter.after
@@ -172,13 +168,62 @@ def _read_rows(
     return rows.cast(layout.schema)
 
 
+def count_gold_images(
+    *,
+    store: LakeStore,
+    paths: CvLakePaths,
+    manifest: GoldManifest,
+    release: ReleaseManifest | None,
+    selection: ImageSelection,
+) -> int:
+    gold_files, _ = _select_files(
+        paths=paths,
+        manifest=manifest,
+        release=release,
+        layout=_LAYOUTS[GoldTable.IMAGES],
+        row_filter=selection,
+    )
+    if not gold_files:
+        return 0
+    parameters: dict[str, object] = {"gold": gold_files}
+    conditions = _build_selection_conditions(selection=selection, parameters=parameters)
+    where = f"where {' and '.join(conditions)}" if conditions else ""
+    query = f"select count(*) from read_parquet($gold) g {where}"
+    with store.duckdb() as connection:
+        connection.execute("set TimeZone = 'UTC'")
+        row = connection.execute(query=query, parameters=parameters).fetchone()
+    return 0 if row is None else row[0]
+
+
+def _build_selection_conditions(
+    *, selection: ImageSelection, parameters: dict[str, object]
+) -> list[str]:
+    """Return the conditions on the gold rows, and add their values to `parameters`."""
+    conditions: list[str] = []
+    if selection.changed_since is not None:
+        conditions.append("g.changed_at > cast($changed_since as timestamptz)")
+        parameters["changed_since"] = selection.changed_since
+    if selection.commercial_use is not None:
+        conditions.append("g.commercial_use = cast($commercial_use as boolean)")
+        parameters["commercial_use"] = selection.commercial_use
+    if selection.shard is not None and selection.num_shards is not None:
+        # The image id is an MD5, so its first 32 bits spread evenly. A box follows
+        # its image. DuckDB's hash() is not stable across versions, so it is not used.
+        conditions.append(
+            "('0x' || left(g.image_id, 8))::ubigint % $num_shards = $shard"
+        )
+        parameters["num_shards"] = selection.num_shards
+        parameters["shard"] = selection.shard
+    return conditions
+
+
 def _select_files(
     *,
     paths: CvLakePaths,
     manifest: GoldManifest,
     release: ReleaseManifest | None,
     layout: _TableLayout,
-    row_filter: ImageFilter,
+    row_filter: ImageSelection,
 ) -> tuple[list[str], list[str]]:
     """Return the gold files and the silver embedding files of the selected splits."""
     gold_file = gold_boxes_file if layout.reads_boxes else gold_images_file

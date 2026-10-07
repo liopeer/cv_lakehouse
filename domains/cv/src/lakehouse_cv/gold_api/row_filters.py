@@ -5,8 +5,9 @@
 """The query parameters that select gold rows."""
 
 from datetime import datetime
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lakehouse_cv.contract.split_roles import SplitRole
 
@@ -15,7 +16,7 @@ DEFAULT_ROW_LIMIT = 1_000
 MAX_ROW_LIMIT = 100_000
 
 
-class ImageFilter(BaseModel):
+class ImageSelection(BaseModel):
     """Select images. A parameter that is given more than once matches any value."""
 
     model_config = ConfigDict(extra="forbid")
@@ -31,6 +32,26 @@ class ImageFilter(BaseModel):
     # Rows that a gold build changed after this time.
     changed_since: datetime | None = None
     commercial_use: bool | None = None
+    # One of `num_shards` shards. An image stays in its shard across gold versions.
+    shard: int | None = Field(default=None, ge=0)
+    num_shards: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def reject_incomplete_shard(self) -> Self:
+        if (self.shard is None) != (self.num_shards is None):
+            raise ValueError("Give `shard` and `num_shards` together.")
+        if (
+            self.shard is not None
+            and self.num_shards is not None
+            and self.shard >= self.num_shards
+        ):
+            raise ValueError("`shard` must be less than `num_shards`.")
+        return self
+
+
+class ImageFilter(ImageSelection):
+    """Select one page of images."""
+
     limit: int = Field(default=DEFAULT_ROW_LIMIT, ge=1, le=MAX_ROW_LIMIT)
     # The `next_after` of the page before. Rows come in the order of their id.
     after: str | None = None

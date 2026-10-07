@@ -19,8 +19,17 @@ from lakehouse_core.lake_store import LakeStore
 from lakehouse_cv.contract.class_registry import CanonicalClass
 from lakehouse_cv.contract.manifests import GoldManifest, ReleaseManifest
 from lakehouse_cv.gold_api.arrow_responses import build_rows_response
-from lakehouse_cv.gold_api.gold_queries import GoldTable, read_gold_page
-from lakehouse_cv.gold_api.row_filters import DRAFT_RELEASE, BoxFilter, ImageFilter
+from lakehouse_cv.gold_api.gold_queries import (
+    GoldTable,
+    count_gold_images,
+    read_gold_page,
+)
+from lakehouse_cv.gold_api.row_filters import (
+    DRAFT_RELEASE,
+    BoxFilter,
+    ImageFilter,
+    ImageSelection,
+)
 from lakehouse_cv.settings import CvLakePaths, CvSettings
 from lakehouse_cv.transforms.gold_build import read_gold_manifest
 from lakehouse_cv.transforms.gold_release import (
@@ -53,7 +62,7 @@ def create_app(store: LakeStore) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No release {release}.")
         return read_release_manifest(paths=paths, release=release)
 
-    def resolve_release(row_filter: ImageFilter) -> ReleaseManifest | None:
+    def resolve_release(row_filter: ImageSelection) -> ReleaseManifest | None:
         """Return the release that holds the val and test rows, or None for gold."""
         reads_eval_rows = not row_filter.role or any(
             role.is_eval for role in row_filter.role
@@ -126,6 +135,19 @@ def create_app(store: LakeStore) -> FastAPI:
         return respond_with_rows(
             table=GoldTable.IMAGES, row_filter=row_filter, accept=accept
         )
+
+    @app.get("/v1/images/count")
+    def count_images(
+        selection: Annotated[ImageSelection, Query()],
+    ) -> dict[str, int]:
+        count = count_gold_images(
+            store=store,
+            paths=paths,
+            manifest=read_current_manifest(),
+            release=resolve_release(selection),
+            selection=selection,
+        )
+        return {"count": count}
 
     @app.get("/v1/boxes")
     def list_boxes(

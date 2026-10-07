@@ -160,3 +160,76 @@ def test_embeddings_join_the_silver_vectors_onto_gold_ids(client: TestClient) ->
 def test_crop_embeddings_filter_by_class(client: TestClient) -> None:
     crops = _rows(client=client, path="/v1/crop_embeddings", class_name="face")
     assert len(crops) == 6
+
+
+def test_shards_split_the_images_by_a_fixed_rule(client: TestClient) -> None:
+    every_id = {row["image_id"] for row in _rows(client=client, path="/v1/images")}
+    seen: set[str] = set()
+    for shard in range(4):
+        ids = {
+            row["image_id"]
+            for row in _rows(
+                client=client, path="/v1/images", shard=shard, num_shards=4
+            )
+        }
+        # The rule is part of the API. A change of it moves images between shards.
+        assert all(int(image_id[:8], 16) % 4 == shard for image_id in ids)
+        assert not ids & seen
+        seen |= ids
+    assert seen == every_id
+
+
+@pytest.mark.parametrize(
+    argnames="path", argvalues=["/v1/boxes", "/v1/crop_embeddings"]
+)
+def test_a_box_comes_in_the_shard_of_its_image(client: TestClient, path: str) -> None:
+    box_image = {
+        row["box_id"]: row["image_id"] for row in _rows(client=client, path="/v1/boxes")
+    }
+    seen: set[str] = set()
+    for shard in range(3):
+        image_ids = {
+            row["image_id"]
+            for row in _rows(
+                client=client, path="/v1/images", shard=shard, num_shards=3
+            )
+        }
+        box_ids = {
+            row["box_id"]
+            for row in _rows(client=client, path=path, shard=shard, num_shards=3)
+        }
+        assert all(box_image[box_id] in image_ids for box_id in box_ids)
+        seen |= box_ids
+    assert seen == set(box_image)
+
+
+@pytest.mark.parametrize(
+    argnames="params",
+    argvalues=[{"shard": 0}, {"num_shards": 2}, {"shard": 4, "num_shards": 4}],
+)
+def test_an_incomplete_shard_is_rejected(client: TestClient, params: dict) -> None:
+    for path in ("/v1/images", "/v1/images/count"):
+        response = client.get(url=path, params={"release": "draft", **params})
+        assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    argnames="params",
+    argvalues=[
+        {},
+        {"dataset": "open_images"},
+        {"role": "val"},
+        {"shard": 1, "num_shards": 2},
+        {"dataset": "no_such_dataset"},
+    ],
+)
+def test_the_count_equals_the_rows(client: TestClient, params: dict) -> None:
+    response = client.get(url="/v1/images/count", params={"release": "draft", **params})
+    assert response.status_code == 200, response.text
+    rows = _rows(client=client, path="/v1/images", **params)
+    assert response.json() == {"count": len(rows)}
+
+
+def test_a_count_of_eval_rows_names_a_release(client: TestClient) -> None:
+    assert client.get("/v1/images/count").status_code == 400
+    assert client.get("/v1/images/count", params={"role": "train"}).status_code == 200
