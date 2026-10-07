@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.2.0...studio-v0.3.0) (2026-10-07)
+
+
+### Features
+
+* **studio:** split a dataset over 500k images into shards ([#48](https://github.com/liopeer/cv_lakehouse/issues/48)) ([df6380b](https://github.com/liopeer/cv_lakehouse/commit/df6380bc5ce80bc5e5d09106cbe2417ef1658aa1))
+
 ## [0.2.0](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.1.0...studio-v0.2.0) (2026-10-04)
 
 
