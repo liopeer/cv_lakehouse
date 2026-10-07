@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Bring one LightlyStudio dataset in step with gold.
+"""Bring one Studio dataset in step with its slice of gold.
 
 The rule that lets a curator and the lake both write: the sync records every box as it
 last wrote it, in `loaded_box`. A box that differs from its record, or that is gone,
@@ -24,7 +24,12 @@ from lightly_studio.resolvers import annotation_resolver
 from sqlalchemy import CursorResult, text
 from sqlmodel import Session
 
-from cv_lakehouse_studio.gold_client import GoldClient, GoldDataset, GoldMeta
+from cv_lakehouse_studio.gold_client import (
+    GoldClient,
+    GoldDataset,
+    GoldMeta,
+    GoldSlice,
+)
 from cv_lakehouse_studio.scaffolding import (
     DatasetScaffold,
     get_or_create_dataset_scaffold,
@@ -37,6 +42,7 @@ from cv_lakehouse_studio.staging import (
     stage_images,
     stage_names,
 )
+from cv_lakehouse_studio.studio_datasets import StudioDataset
 from cv_lakehouse_studio.sync_state import SYNC_SCHEMA
 
 # The `origin` that gold gives a box that a curator drew.
@@ -45,7 +51,7 @@ STUDIO_ORIGIN = "studio"
 
 @dataclass(frozen=True)
 class SyncReport:
-    dataset: str
+    studio_dataset: str
     num_images: int
     num_new_boxes: int
     num_updated_boxes: int
@@ -53,14 +59,16 @@ class SyncReport:
     num_embeddings: int
 
 
-def read_synced_gold(session: Session, dataset: str) -> tuple[int, datetime] | None:
+def read_synced_gold(
+    session: Session, studio_dataset: str
+) -> tuple[int, datetime] | None:
     """Return the gold version and build time that this dataset was last synced to."""
     row = session.execute(
         text(
             f"select gold_version, gold_built_at from {SYNC_SCHEMA}.synced_dataset "
-            "where dataset = :dataset"
+            "where studio_dataset = :studio_dataset"
         ),
-        {"dataset": dataset},
+        {"studio_dataset": studio_dataset},
     ).one_or_none()
     return None if row is None else (row[0], row[1])
 
@@ -70,20 +78,27 @@ def sync_dataset(
     client: GoldClient,
     meta: GoldMeta,
     dataset: GoldDataset,
+    studio_dataset: StudioDataset,
     class_names: Sequence[str],
     image_base: str,
 ) -> SyncReport:
-    name = dataset.dataset
+    name = studio_dataset.name
+    gold_slice = studio_dataset.gold_slice
+    splits = [
+        split
+        for split in dataset.splits
+        if gold_slice.split is None or split.split == gold_slice.split
+    ]
     scaffold = get_or_create_dataset_scaffold(
         dataset=name,
         class_names=class_names,
         tag_names=sorted(
-            {f"role/{split.role}" for split in dataset.splits}
-            | {f"split/{split.split}" for split in dataset.splits}
+            {f"role/{split.role}" for split in splits}
+            | {f"split/{split.split}" for split in splits}
         ),
     )
     session = scaffold.session
-    synced = read_synced_gold(session=session, dataset=name)
+    synced = read_synced_gold(session=session, studio_dataset=name)
 
     # The first page tells the dimension, which the model row needs. The resolvers
     # commit, and a commit drops the staging tables, so every resolver call comes
@@ -91,6 +106,7 @@ def sync_dataset(
     embedding_pages = _iter_embedding_pages(
         client=client,
         dataset=dataset,
+        gold_slice=gold_slice,
         changed_since=None if synced is None else synced[1],
     )
     first_embedding_page = next(embedding_pages, None)
@@ -101,9 +117,9 @@ def sync_dataset(
     create_staging_tables(session)
     stage_names(session=session, table="stage_label", ids=scaffold.label_ids)
     stage_names(session=session, table="stage_tag", ids=scaffold.tag_ids)
-    for page in client.iter_pages(table="images", dataset=name):
+    for page in client.iter_pages(table="images", gold_slice=gold_slice):
         stage_images(session=session, page=page)
-    for page in client.iter_pages(table="boxes", dataset=name):
+    for page in client.iter_pages(table="boxes", gold_slice=gold_slice):
         stage_boxes(session=session, page=page)
     if first_embedding_page is not None:
         embedding_pages = itertools.chain([first_embedding_page], embedding_pages)
@@ -111,7 +127,8 @@ def sync_dataset(
         stage_embeddings(session=session, ids=ids, page=page)
 
     parameters = {
-        "dataset": name,
+        "dataset": dataset.dataset,
+        "studio_dataset": name,
         "image_base": image_base.rstrip("/"),
         "collection": scaffold.collection_id,
         "annotations": scaffold.annotation_collection_id,
@@ -131,7 +148,7 @@ def sync_dataset(
 
     _delete_boxes(session=session, box_ids=removed_box_ids)
     return SyncReport(
-        dataset=name,
+        studio_dataset=name,
         num_images=counts["images"],
         num_new_boxes=counts["new_boxes"],
         num_updated_boxes=counts["updated_boxes"],
@@ -141,7 +158,11 @@ def sync_dataset(
 
 
 def _iter_embedding_pages(
-    *, client: GoldClient, dataset: GoldDataset, changed_since: datetime | None
+    *,
+    client: GoldClient,
+    dataset: GoldDataset,
+    gold_slice: GoldSlice,
+    changed_since: datetime | None,
 ) -> Iterator[tuple[list[str], pa.Table]]:
     """Yield the ids and the page of every page that holds a vector.
 
@@ -152,7 +173,7 @@ def _iter_embedding_pages(
         return
     for table, key in (("embeddings", "image_id"), ("crop_embeddings", "box_id")):
         for page in client.iter_pages(
-            table=table, dataset=dataset.dataset, changed_since=changed_since
+            table=table, gold_slice=gold_slice, changed_since=changed_since
         ):
             if page.num_rows:
                 yield page.column(key).to_pylist(), page
@@ -307,8 +328,9 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         "new_boxes",
         f"""
         insert into {SYNC_SCHEMA}.loaded_box
-            (box_id, image_id, dataset, label, x, y, width, height)
-        select box_id, image_id, :dataset, label, x, y, width, height from new_box
+            (box_id, image_id, dataset, studio_dataset, label, x, y, width, height)
+        select box_id, image_id, :dataset, :studio_dataset, label, x, y, width, height
+        from new_box
         """,
     ),
     (
@@ -370,9 +392,10 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
     (
         "synced_dataset",
         f"""
-        insert into {SYNC_SCHEMA}.synced_dataset (dataset, gold_version, gold_built_at)
-        values (:dataset, :gold_version, :gold_built_at)
-        on conflict (dataset) do update
+        insert into {SYNC_SCHEMA}.synced_dataset
+            (studio_dataset, gold_version, gold_built_at)
+        values (:studio_dataset, :gold_version, :gold_built_at)
+        on conflict (studio_dataset) do update
             set gold_version = excluded.gold_version,
                 gold_built_at = excluded.gold_built_at
         """,
@@ -384,7 +407,7 @@ _REMOVED_BOX_QUERY = f"""
 select loaded.box_id from {SYNC_SCHEMA}.loaded_box loaded
 left join stage_box staged on staged.box_id = loaded.box_id
 {_STUDIO_BOX_JOINS}
-where loaded.dataset = :dataset
+where loaded.studio_dataset = :studio_dataset
   and staged.box_id is null
   and {_STUDIO_EQUALS_LOADED}
 """

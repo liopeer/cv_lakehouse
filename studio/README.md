@@ -32,7 +32,8 @@ has. The logo in the header leads back to the list.
 The sync reads the [gold API](../README.md#the-gold-api) and writes Postgres. It shares
 no code with `cv_lakehouse`.
 
-- One LightlyStudio dataset per lakehouse dataset, with the same name.
+- A lakehouse dataset of at most 500k images is one LightlyStudio dataset, with the
+  same name. A larger one is split. See [Large datasets](#large-datasets).
 - An image carries the tags `role/<role>` and `split/<split>`.
 - The boxes are in the annotation collection `lakehouse`.
 - The id of an annotation is its `box_id` in gold, and the id of an image its `image_id`.
@@ -62,6 +63,18 @@ skips it, so it stays the curator's.
 The LightlyStudio server owns the schema, and migrates it on start. The sync writes only
 while the database is at the migration that its own LightlyStudio build expects. Deploy
 both images from one release.
+
+## Large datasets
+
+LightlyStudio holds about 1M images per dataset. A lakehouse dataset over
+`CV_LAKEHOUSE_STUDIO_MAX_IMAGES_PER_DATASET` is one LightlyStudio dataset per split,
+such as `open_images.validation`. A split over the cap is one per shard of the gold API,
+such as `open_images.train.2-of-4`.
+
+The sync counts the images when it first sees a dataset, and stores the plan in
+`lakehouse_sync.studio_dataset`. It never plans that dataset again, so an image never
+moves to another LightlyStudio dataset. The corrections of every part come under the
+lakehouse dataset.
 
 ## The export
 
@@ -102,6 +115,7 @@ starts a new chain, and the lake then rejects it. Back up Postgres.
 | `CV_LAKEHOUSE_STUDIO_GOLD_API_URL` | sync | the gold API, such as `http://lakehouse:8000` |
 | `CV_LAKEHOUSE_STUDIO_IMAGE_BASE` | sync | where the lake root is for the server |
 | `CV_LAKEHOUSE_STUDIO_SYNC_INTERVAL_SECONDS` | sync | the pause between two runs. 3600 by default |
+| `CV_LAKEHOUSE_STUDIO_MAX_IMAGES_PER_DATASET` | sync | the cap of a LightlyStudio dataset. 500000 by default |
 | `CV_LAKEHOUSE_STUDIO_EXPORT_PORT` | sync | the port of the export. 8002 by default |
 
 Gold names a pixel relative to the lake root. The sync puts `IMAGE_BASE` in front, and

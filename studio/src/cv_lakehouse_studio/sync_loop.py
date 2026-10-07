@@ -19,6 +19,10 @@ import psycopg
 from lightly_studio.database import db_manager, db_migrations
 
 from cv_lakehouse_studio.gold_client import GoldClient, HttpGoldClient
+from cv_lakehouse_studio.studio_datasets import (
+    DEFAULT_MAX_IMAGES_PER_DATASET,
+    read_or_plan_studio_datasets,
+)
 from cv_lakehouse_studio.studio_settings import StudioSettings
 from cv_lakehouse_studio.sync import SyncReport, read_synced_gold, sync_dataset
 from cv_lakehouse_studio.sync_state import create_sync_schema
@@ -50,8 +54,13 @@ def reject_schema_mismatch(database_url: str) -> None:
         )
 
 
-def sync_every_dataset(*, client: GoldClient, image_base: str) -> list[SyncReport]:
-    """Sync each dataset whose gold changed since its last sync.
+def sync_every_dataset(
+    *,
+    client: GoldClient,
+    image_base: str,
+    max_images: int = DEFAULT_MAX_IMAGES_PER_DATASET,
+) -> list[SyncReport]:
+    """Sync each Studio dataset whose gold changed since its last sync.
 
     The caller connects `db_manager` first.
     """
@@ -61,18 +70,25 @@ def sync_every_dataset(*, client: GoldClient, image_base: str) -> list[SyncRepor
     class_names = client.read_class_names()
     reports: list[SyncReport] = []
     for dataset in meta.datasets:
-        synced = read_synced_gold(session=session, dataset=dataset.dataset)
-        if synced == (meta.version, meta.built_at):
-            continue
-        report = sync_dataset(
-            client=client,
-            meta=meta,
-            dataset=dataset,
-            class_names=class_names,
-            image_base=image_base,
+        studio_datasets = read_or_plan_studio_datasets(
+            session=session, client=client, dataset=dataset, max_images=max_images
         )
-        logger.info(f"Synced {report}")
-        reports.append(report)
+        for studio_dataset in studio_datasets:
+            synced = read_synced_gold(
+                session=session, studio_dataset=studio_dataset.name
+            )
+            if synced == (meta.version, meta.built_at):
+                continue
+            report = sync_dataset(
+                client=client,
+                meta=meta,
+                dataset=dataset,
+                studio_dataset=studio_dataset,
+                class_names=class_names,
+                image_base=image_base,
+            )
+            logger.info(f"Synced {report}")
+            reports.append(report)
     return reports
 
 
@@ -89,7 +105,11 @@ def run_sync_loop(settings: StudioSettings, sync_lock: threading.Lock) -> None:
                 if not connected:
                     db_manager.connect(db_url=settings.database_url)
                     connected = True
-                sync_every_dataset(client=client, image_base=settings.image_base)
+                sync_every_dataset(
+                    client=client,
+                    image_base=settings.image_base,
+                    max_images=settings.max_images_per_dataset,
+                )
         except Exception:
             # A failed run changes nothing, and the next run starts from gold again.
             logger.exception("The sync failed. The next run tries again.")

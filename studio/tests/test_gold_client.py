@@ -8,6 +8,7 @@ import pyarrow as pa
 from cv_lakehouse_studio.gold_client import (
     ARROW_STREAM_MEDIA_TYPE,
     NEXT_AFTER_HEADER,
+    GoldSlice,
     HttpGoldClient,
 )
 
@@ -38,7 +39,9 @@ def test_iter_pages_follows_the_cursor_to_the_last_page() -> None:
         timeout_seconds=1.0,
         transport=httpx.MockTransport(respond),
     )
-    pages = list(client.iter_pages(table="boxes", dataset="faces"))
+    pages = list(
+        client.iter_pages(table="boxes", gold_slice=GoldSlice(dataset="faces"))
+    )
 
     assert [page.column("box_id").to_pylist() for page in pages] == [["a", "b"], ["c"]]
     assert [request.url.params.get("after") for request in requests] == [None, "b"]
@@ -85,3 +88,28 @@ def test_read_meta_and_class_names_parse_the_api_answers() -> None:
     assert client.read_class_names() == ["face"]
     meta = client.read_meta()
     assert (meta.version, meta.datasets[0].splits[0].role) == (3, "train")
+
+
+def test_a_slice_reaches_the_api_as_parameters() -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/v1/images/count":
+            return httpx.Response(status_code=200, json={"count": 7})
+        return httpx.Response(status_code=200, content=_serialize(["a"]))
+
+    client = HttpGoldClient(
+        base_url="http://gold",
+        timeout_seconds=1.0,
+        transport=httpx.MockTransport(respond),
+    )
+    gold_slice = GoldSlice(dataset="faces", split="train", shard=1, num_shards=4)
+    assert client.count_images(GoldSlice(dataset="faces")) == 7
+    list(client.iter_pages(table="images", gold_slice=gold_slice))
+
+    assert dict(requests[0].url.params) == {"dataset": "faces", "release": "draft"}
+    assert {
+        key: requests[1].url.params[key]
+        for key in ("dataset", "split", "shard", "num_shards")
+    } == {"dataset": "faces", "split": "train", "shard": "1", "num_shards": "4"}
