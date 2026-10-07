@@ -12,14 +12,18 @@ from lightly_studio.resolvers import annotation_resolver
 from sqlalchemy import text
 
 from cv_lakehouse_studio.sync_loop import sync_every_dataset
+from cv_lakehouse_studio.sync_state import create_sync_schema
 from tests.fakes import (
     BOX_1,
     BOX_2,
     DATASET,
     IMAGE_A,
+    IMAGE_B,
     FakeGoldClient,
     derive_id,
     make_box,
+    make_image,
+    select_shard,
 )
 
 IMAGE_BASE = "/lake"
@@ -245,3 +249,125 @@ def test_a_gold_with_no_embedding_model_loads_no_vector() -> None:
     _sync(FakeGoldClient(embedding_model=None))
     assert _fetch("select count(*) from sample_embedding") == [(0,)]
     assert _fetch("select count(*) from embedding_model") == [(0,)]
+
+
+def _make_sharded_client() -> FakeGoldClient:
+    """Train holds seven images, so a cap of two gives four shards."""
+    more_images = [
+        make_image(file_name=f"{n}.jpg", split="train", image_path=f"t/{n}.jpg")
+        for n in range(6)
+    ]
+    boxes = [
+        make_box(
+            box_id=derive_id(f"{image['file_name']}#0"),
+            image_id=image["image_id"],
+            class_name="face",
+            x=1.0,
+            y=1.0,
+            w=2.0,
+            h=2.0,
+        )
+        for image in more_images
+    ]
+    return FakeGoldClient(more_images=more_images, boxes=[*_DEFAULT_BOXES, *boxes])
+
+
+_DEFAULT_BOXES = FakeGoldClient().boxes
+
+
+def _fetch_images_by_studio_dataset() -> dict[str, set[str]]:
+    rows = _fetch(
+        """
+        select collection.name, image.sample_id
+        from image
+        join sample using (sample_id)
+        join collection using (collection_id)
+        """
+    )
+    images: dict[str, set[str]] = {}
+    for name, image_id in rows:
+        images.setdefault(name, set()).add(str(image_id))
+    return images
+
+
+def test_a_dataset_over_the_cap_syncs_into_one_studio_dataset_per_shard() -> None:
+    client = _make_sharded_client()
+    reports = sync_every_dataset(client=client, image_base=IMAGE_BASE, max_images=2)
+
+    names = [f"faces.train.{k}-of-4" for k in range(1, 5)] + ["faces.validation"]
+    assert sorted(report.studio_dataset for report in reports) == names
+    images = _fetch_images_by_studio_dataset()
+    assert images["faces.validation"] == {IMAGE_B}
+    for shard in range(4):
+        assert all(
+            select_shard(image_id=image_id, num_shards=4) == shard
+            for image_id in images.get(f"faces.train.{shard + 1}-of-4", set())
+        )
+    assert len(_fetch_boxes()) == 8
+
+
+def test_a_shard_keeps_the_boxes_of_another_shard() -> None:
+    client = _make_sharded_client()
+    sync_every_dataset(client=client, image_base=IMAGE_BASE, max_images=2)
+    client.publish_new_version()
+
+    reports = sync_every_dataset(client=client, image_base=IMAGE_BASE, max_images=2)
+
+    assert all(report.num_removed_boxes == 0 for report in reports)
+    assert len(_fetch_boxes()) == 8
+
+
+def test_a_stored_plan_stays_when_gold_grows() -> None:
+    client = _make_sharded_client()
+    sync_every_dataset(client=client, image_base=IMAGE_BASE, max_images=2)
+    client.more_images.extend(
+        make_image(file_name=f"new{n}.jpg", split="train", image_path=f"t/new{n}.jpg")
+        for n in range(4)
+    )
+    client.publish_new_version()
+
+    sync_every_dataset(client=client, image_base=IMAGE_BASE, max_images=2)
+
+    names = _fetch("select name from collection where parent_collection_id is null")
+    assert sorted(name for (name,) in names) == [
+        f"faces.train.{k}-of-4" for k in range(1, 5)
+    ] + ["faces.validation"]
+    images = _fetch_images_by_studio_dataset()
+    assert sum(len(ids) for ids in images.values()) == 12
+
+
+def test_the_state_of_a_sync_before_shards_carries_over() -> None:
+    session = db_manager.persistent_session()
+    for statement in (
+        "create schema lakehouse_sync",
+        """
+        create table lakehouse_sync.synced_dataset (
+            dataset text primary key,
+            gold_version integer not null,
+            gold_built_at timestamptz not null
+        )
+        """,
+        """
+        create table lakehouse_sync.loaded_box (
+            box_id uuid primary key, image_id uuid not null, dataset text not null,
+            label text not null, x integer not null, y integer not null,
+            width integer not null, height integer not null
+        )
+        """,
+        "insert into lakehouse_sync.synced_dataset values ('faces', 1, now())",
+        f"""
+        insert into lakehouse_sync.loaded_box
+        values ('{BOX_1}', '{IMAGE_A}', 'faces', 'face', 1, 2, 3, 4)
+        """,
+    ):
+        session.execute(text(statement))
+    session.commit()
+
+    create_sync_schema(session)
+
+    assert _fetch("select studio_dataset from lakehouse_sync.synced_dataset") == [
+        ("faces",)
+    ]
+    assert _fetch("select studio_dataset from lakehouse_sync.loaded_box") == [
+        ("faces",)
+    ]

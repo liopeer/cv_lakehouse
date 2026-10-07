@@ -16,7 +16,7 @@ from typing import Protocol
 
 import httpx
 import pyarrow as pa
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 NEXT_AFTER_HEADER = "X-Next-After"
@@ -34,6 +34,22 @@ class GoldDataset(BaseModel):
     splits: list[GoldSplit]
 
 
+class GoldSlice(BaseModel):
+    """The rows of one dataset, or of one split of it, or of one shard of that split."""
+
+    model_config = ConfigDict(frozen=True)
+
+    dataset: str
+    split: str | None = None
+    shard: int | None = None
+    num_shards: int | None = None
+
+    def to_params(self) -> dict[str, str | int]:
+        return {
+            key: value for key, value in self.model_dump().items() if value is not None
+        }
+
+
 class GoldMeta(BaseModel):
     """The part of the gold manifest that the sync reads."""
 
@@ -49,8 +65,14 @@ class GoldClient(Protocol):
 
     def read_class_names(self) -> list[str]: ...
 
+    def count_images(self, gold_slice: GoldSlice) -> int: ...
+
     def iter_pages(
-        self, *, table: str, dataset: str, changed_since: datetime | None = None
+        self,
+        *,
+        table: str,
+        gold_slice: GoldSlice,
+        changed_since: datetime | None = None,
     ) -> Iterator[pa.Table]: ...
 
 
@@ -72,12 +94,24 @@ class HttpGoldClient(GoldClient):
     def read_class_names(self) -> list[str]:
         return [entry["class_name"] for entry in self._get_json("/v1/classes")]
 
+    def count_images(self, gold_slice: GoldSlice) -> int:
+        response = self._client.get(
+            url="/v1/images/count",
+            params={**gold_slice.to_params(), "release": "draft"},
+        )
+        response.raise_for_status()
+        return response.json()["count"]
+
     def iter_pages(
-        self, *, table: str, dataset: str, changed_since: datetime | None = None
+        self,
+        *,
+        table: str,
+        gold_slice: GoldSlice,
+        changed_since: datetime | None = None,
     ) -> Iterator[pa.Table]:
         # The curators work on the gold of now, not on a frozen release.
         params: dict[str, str | int] = {
-            "dataset": dataset,
+            **gold_slice.to_params(),
             "release": "draft",
             "limit": ROWS_PER_PAGE,
         }

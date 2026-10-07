@@ -229,3 +229,13 @@ def test_the_corrections_stay_live_after_they_come_back_in_gold(
     synced.publish_new_version()
     sync_every_dataset(client=synced, image_base="/lake")
     assert {row["box_id"] for row in _detect(database_url)} == {BOX_1, BOX_2}
+
+
+def test_the_corrections_of_a_split_dataset_come_under_the_gold_dataset(
+    database_url: str,
+) -> None:
+    sync_every_dataset(client=FakeGoldClient(), image_base="/lake", max_images=1)
+    curator.relabel_box(box_id=BOX_1, label_name="other")
+    assert _detect(database_url) == [
+        _correction(box_id=BOX_1, action="update", label_name="other")
+    ]
