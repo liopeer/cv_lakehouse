@@ -4,14 +4,19 @@
 #
 from pathlib import Path
 
+import pytest
+from upath import UPath
+
 from lakehouse_cv.contract.class_registry import CanonicalClass
 from lakehouse_cv.sources.base import read_raw_images
 from lakehouse_cv.sources.open_images import (
     OpenImagesSource,
     build_image_file_name,
     is_instance_box,
+    read_rows_by_image,
 )
 from lakehouse_cv.transforms.normalization import RawImageNormalizer
+from tests.fixtures import OPEN_IMAGES_HEADER, _open_images_row
 from tests.fixtures import make_open_images as _fixture
 
 
@@ -114,3 +119,20 @@ def test_a_train_image_lives_in_the_shard_of_its_first_digit(tmp_path: Path) -> 
     )
     assert [image.file_name for image in images] == ["train_d/d1e.jpg"]
     assert build_image_file_name(split="validation", image_id="d1e") == "d1e.jpg"
+
+
+def test_rejects_a_csv_that_is_not_grouped_by_image(tmp_path: Path) -> None:
+    annotation_file = tmp_path / "boxes.csv"
+    annotation_file.write_text(
+        "\n".join(
+            [
+                OPEN_IMAGES_HEADER,
+                _open_images_row(image_id="aaa", mid="/m/0dzct", box="0,1,0,1"),
+                _open_images_row(image_id="bbb", mid="/m/0dzct", box="0,1,0,1"),
+                _open_images_row(image_id="aaa", mid="/m/0dzct", box="0,1,0,1"),
+            ]
+        )
+        + "\n"
+    )
+    with pytest.raises(ValueError, match="aaa repeats"):
+        list(read_rows_by_image(UPath(annotation_file)))
