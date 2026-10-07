@@ -17,6 +17,8 @@ from __future__ import annotations
 import csv
 from argparse import ArgumentParser
 from collections.abc import Iterable, Iterator
+from itertools import groupby
+from operator import itemgetter
 
 from labelformat.model.bounding_box import BoundingBox, BoundingBoxFormat
 from labelformat.model.category import Category
@@ -114,9 +116,9 @@ class OpenImagesSource(BronzeSource, BoxAttributeSource):
         the box and the flag, and its consumer applies the rule.
         """
         image_root = self.image_root(bronze_dir=bronze_dir, split=split)
-        for image_id, rows in _rows_by_image(
+        for image_id, rows in read_rows_by_image(
             _annotation_file(bronze_dir=bronze_dir, split=split)
-        ).items():
+        ):
             file_name = build_image_file_name(split=split, image_id=image_id)
             path = image_root / file_name
             if not path.exists():
@@ -158,9 +160,8 @@ class OpenImagesObjectDetectionInput(ObjectDetectionInput):
             yield label.image
 
     def get_labels(self) -> Iterable[ImageObjectDetection]:
-        by_image = _rows_by_image(self.annotation_file)
         index = 0
-        for image_id, rows in by_image.items():
+        for image_id, rows in read_rows_by_image(self.annotation_file):
             file_name = build_image_file_name(split=self.split, image_id=image_id)
             path = self.image_root / file_name
             if not path.exists():
@@ -204,12 +205,26 @@ def _build_raw_box(row: dict[str, str], width: int, height: int) -> RawBox:
     )
 
 
-def _rows_by_image(annotation_file: UPath) -> dict[str, list[dict[str, str]]]:
-    grouped: dict[str, list[dict[str, str]]] = {}
+def read_rows_by_image(
+    annotation_file: UPath,
+) -> Iterator[tuple[str, list[dict[str, str]]]]:
+    """Stream the rows of one image at a time.
+
+    The train CSV holds 14.6M rows, which as dicts outgrow the memory of the code
+    server. Every published box CSV is sorted by ImageID, so the rows of one image are
+    contiguous.
+    """
+    seen: set[str] = set()
     with annotation_file.open(newline="") as handle:
-        for row in csv.DictReader(handle):
-            grouped.setdefault(row["ImageID"], []).append(row)
-    return grouped
+        for image_id, rows in groupby(
+            csv.DictReader(handle), key=itemgetter("ImageID")
+        ):
+            if image_id in seen:
+                raise ValueError(
+                    f"{annotation_file} is not grouped by ImageID: {image_id} repeats"
+                )
+            seen.add(image_id)
+            yield image_id, list(rows)
 
 
 def build_image_file_name(split: str, image_id: str) -> str:
