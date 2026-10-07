@@ -285,6 +285,7 @@ curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face&releas
 | `/v1/releases`, `/v1/releases/{n}` | the eval releases, each with its files |
 | `/v1/classes` | the class registry, also before gold exists |
 | `/v1/images` | one per image |
+| `/v1/images/count` | none: `{"count": n}`, the number of images that the filter selects |
 | `/v1/boxes` | one per box |
 | `/v1/embeddings` | `image_id` and the MobileCLIP vector of the image |
 | `/v1/crop_embeddings` | `box_id` and the MobileCLIP vector of the box crop |
@@ -296,6 +297,7 @@ curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face&releas
 | `class_name` | boxes of these classes. Not on `/v1/images` and `/v1/embeddings` |
 | `commercial_use` | rows of the datasets with this licence answer |
 | `changed_since` | rows that a gold build changed after this time |
+| `shard`, `num_shards` | the images of one shard, and their boxes and vectors |
 | `limit`, `after` | one page. `limit` is 1000 by default and at most 100000 |
 
 A request that can return val or test rows must name a `release`. A number gives the
@@ -303,6 +305,10 @@ frozen rows of that release, and `draft` gives the gold that the curators work o
 benchmark never moves to other rows without a change on its side. Train rows are always
 those of the current gold, and a request with only `role=train` needs no release. The
 vector endpoints serve the draft only.
+
+The shard of an image is the first 32 bits of its `image_id`, modulo `num_shards`. It
+never changes, so a consumer that keeps `num_shards` keeps its images. See
+[ADR 0011](docs/adr/0011-gold-serves-stable-shards.md).
 
 A parameter that is given more than once matches any of its values. The rows come in
 the order of their id. A full page carries `next_after`, and the next request sends it
