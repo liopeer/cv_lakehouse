@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/liopeer/cv_lakehouse/compare/v0.4.0...v0.5.0) (2026-10-07)
+
+
+### Features
+
+* **gold-api:** serve images in stable shards, and count them ([#45](https://github.com/liopeer/cv_lakehouse/issues/45)) ([6f826f0](https://github.com/liopeer/cv_lakehouse/commit/6f826f0854ce55b036b7700d698e67c8015fbd4d))
+
+
+### Bug Fixes
+
+* **open-images:** stream the box rows one image at a time ([#47](https://github.com/liopeer/cv_lakehouse/issues/47)) ([f82ef2d](https://github.com/liopeer/cv_lakehouse/commit/f82ef2d6b2969ce42c8684ea0fe148f1cb90898c))
+
 ## [0.4.0](https://github.com/liopeer/cv_lakehouse/compare/v0.3.0...v0.4.0) (2026-10-04)
 
 
