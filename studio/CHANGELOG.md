@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.3.0...studio-v0.4.0) (2026-10-08)
+
+
+### Features
+
+* **studio:** read the page sizes of the sync from the environment ([#51](https://github.com/liopeer/cv_lakehouse/issues/51)) ([febe892](https://github.com/liopeer/cv_lakehouse/commit/febe892bf292451246010643870a784ed5c875f3))
+
 ## [0.3.0](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.2.0...studio-v0.3.0) (2026-10-07)
 
 
