@@ -48,7 +48,8 @@ def list_release_numbers(paths: CvLakePaths) -> list[int]:
     return sorted(
         int(path.name)
         for path in releases_dir.iterdir()
-        if (path / RELEASE_MANIFEST).exists()
+        # A failed move leaves a staging directory with a manifest.
+        if path.name.isdigit() and (path / RELEASE_MANIFEST).exists()
     )
 
 
