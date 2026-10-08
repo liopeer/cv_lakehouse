@@ -37,6 +37,8 @@ def test_iter_pages_follows_the_cursor_to_the_last_page() -> None:
     client = HttpGoldClient(
         base_url="http://gold",
         timeout_seconds=1.0,
+        rows_per_page=10,
+        embedding_rows_per_page=2,
         transport=httpx.MockTransport(respond),
     )
     pages = list(
@@ -83,6 +85,8 @@ def test_read_meta_and_class_names_parse_the_api_answers() -> None:
     client = HttpGoldClient(
         base_url="http://gold",
         timeout_seconds=1.0,
+        rows_per_page=10,
+        embedding_rows_per_page=2,
         transport=httpx.MockTransport(respond),
     )
     assert client.read_class_names() == ["face"]
@@ -102,6 +106,8 @@ def test_a_slice_reaches_the_api_as_parameters() -> None:
     client = HttpGoldClient(
         base_url="http://gold",
         timeout_seconds=1.0,
+        rows_per_page=10,
+        embedding_rows_per_page=2,
         transport=httpx.MockTransport(respond),
     )
     gold_slice = GoldSlice(dataset="faces", split="train", shard=1, num_shards=4)
@@ -113,3 +119,23 @@ def test_a_slice_reaches_the_api_as_parameters() -> None:
         key: requests[1].url.params[key]
         for key in ("dataset", "split", "shard", "num_shards")
     } == {"dataset": "faces", "split": "train", "shard": "1", "num_shards": "4"}
+
+
+def test_a_page_of_embeddings_holds_fewer_rows() -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status_code=200, content=_serialize(["a"]))
+
+    client = HttpGoldClient(
+        base_url="http://gold",
+        timeout_seconds=1.0,
+        rows_per_page=10,
+        embedding_rows_per_page=2,
+        transport=httpx.MockTransport(respond),
+    )
+    for table in ("boxes", "embeddings", "crop_embeddings"):
+        list(client.iter_pages(table=table, gold_slice=GoldSlice(dataset="faces")))
+
+    assert [request.url.params["limit"] for request in requests] == ["10", "2", "2"]
