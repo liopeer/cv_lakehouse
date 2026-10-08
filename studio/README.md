@@ -117,6 +117,8 @@ starts a new chain, and the lake then rejects it. Back up Postgres.
 | `CV_LAKEHOUSE_STUDIO_SYNC_INTERVAL_SECONDS` | sync | the pause between two runs. 3600 by default |
 | `CV_LAKEHOUSE_STUDIO_MAX_IMAGES_PER_DATASET` | sync | the cap of a LightlyStudio dataset. 500000 by default |
 | `CV_LAKEHOUSE_STUDIO_EXPORT_PORT` | sync | the port of the export. 8002 by default |
+| `CV_LAKEHOUSE_STUDIO_ROWS_PER_PAGE` | sync | the rows of one request for images and boxes. 50000 by default |
+| `CV_LAKEHOUSE_STUDIO_EMBEDDING_ROWS_PER_PAGE` | sync | the rows of one request for embeddings. 5000 by default |
 
 Gold names a pixel relative to the lake root. The sync puts `IMAGE_BASE` in front, and
 LightlyStudio reads the result through fsspec. A pixel of a copy that bronze links from

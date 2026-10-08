@@ -95,7 +95,10 @@ def sync_every_dataset(
 def run_sync_loop(settings: StudioSettings, sync_lock: threading.Lock) -> None:
     """Run forever. Hold `sync_lock` during a run, so the export waits for its end."""
     client = HttpGoldClient(
-        base_url=settings.gold_api_url, timeout_seconds=settings.request_timeout_seconds
+        base_url=settings.gold_api_url,
+        timeout_seconds=settings.request_timeout_seconds,
+        rows_per_page=settings.rows_per_page,
+        embedding_rows_per_page=settings.embedding_rows_per_page,
     )
     connected = False
     while True:

@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict
 
 ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 NEXT_AFTER_HEADER = "X-Next-After"
-ROWS_PER_PAGE = 50_000
+EMBEDDING_TABLES = frozenset({"embeddings", "crop_embeddings"})
 
 
 class GoldSplit(BaseModel):
@@ -82,11 +82,15 @@ class HttpGoldClient(GoldClient):
         *,
         base_url: str,
         timeout_seconds: float,
+        rows_per_page: int,
+        embedding_rows_per_page: int,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._client = httpx.Client(
             base_url=base_url, timeout=timeout_seconds, transport=transport
         )
+        self._rows_per_page = rows_per_page
+        self._embedding_rows_per_page = embedding_rows_per_page
 
     def read_meta(self) -> GoldMeta:
         return GoldMeta.model_validate(self._get_json("/v1/meta"))
@@ -113,7 +117,9 @@ class HttpGoldClient(GoldClient):
         params: dict[str, str | int] = {
             **gold_slice.to_params(),
             "release": "draft",
-            "limit": ROWS_PER_PAGE,
+            "limit": self._embedding_rows_per_page
+            if table in EMBEDDING_TABLES
+            else self._rows_per_page,
         }
         if changed_since is not None:
             params["changed_since"] = changed_since.isoformat()
