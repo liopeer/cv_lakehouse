@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse_cv.contract.manifests import RELEASE_MANIFEST
 from lakehouse_cv.contract.silver_tables import boxes_file
 from lakehouse_cv.defs import gold as gold_defs
 from lakehouse_cv.defs import gold_releases as release_defs
@@ -134,6 +135,18 @@ def test_a_change_to_an_eval_row_gives_the_next_release(
 
     assert manifest.release == 2
     assert list_release_numbers(gold_lake.paths) == [1, 2]
+
+
+def test_a_staging_directory_with_a_manifest_is_no_release(
+    gold_lake: CvLakeResource,
+) -> None:
+    write_eval_release(paths=gold_lake.paths, created_at=NOW)
+    release_dir = gold_lake.paths.gold_release_dir(1)
+    staging_dir = release_dir.with_name(f".{release_dir.name}.staging")
+    staging_dir.mkdir()
+    (staging_dir / RELEASE_MANIFEST).write_text("{}")
+
+    assert list_release_numbers(gold_lake.paths) == [1]
 
 
 def test_a_release_file_that_changed_is_reported(gold_lake: CvLakeResource) -> None:

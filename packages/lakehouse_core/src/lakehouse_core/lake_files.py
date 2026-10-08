@@ -27,7 +27,13 @@ def move_tree(source: UPath, target: UPath) -> None:
     if is_local(source) and is_local(target):
         pathlib.Path(str(source)).rename(pathlib.Path(str(target)))
         return
-    target.fs.mv(source.path, target.path, recursive=True)
+    # A recursive `mv` also copies each directory. On S3 a directory is no object, so
+    # that copy fails with NoSuchKey. Copy the files only.
+    files = [str(file) for file in source.fs.find(source.path, withdirs=False)]
+    target.fs.copy(
+        files, [target.path + file.removeprefix(source.path) for file in files]
+    )
+    source.fs.rm(source.path, recursive=True)
 
 
 def remove_tree(path: UPath) -> None:
