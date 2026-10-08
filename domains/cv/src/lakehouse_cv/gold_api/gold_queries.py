@@ -7,6 +7,9 @@
 The manifest names the role of every file, so a filter on the dataset, the split or
 the role selects files and never opens the others. Every value that a caller sends is
 a bound parameter.
+
+A page of vectors selects its ids from gold first, and then reads their vectors. Silver
+sorts the vectors by the id, so DuckDB reads only the row groups of the page.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 
+import duckdb
 import pyarrow as pa
 from upath import UPath
 
@@ -51,8 +55,8 @@ class _TableLayout:
     key: str
     # Whether the gold rows are the boxes. Otherwise they are the images.
     reads_boxes: bool
-    # The silver embedding rows join onto the gold rows on these columns.
-    embedding_join: tuple[str, ...] | None = None
+    # Whether the rows are the silver vectors of the gold ids.
+    reads_vectors: bool = False
 
 
 _LAYOUTS = {
@@ -66,13 +70,13 @@ _LAYOUTS = {
         schema=GOLD_EMBEDDING_SCHEMA,
         key="image_id",
         reads_boxes=False,
-        embedding_join=("dataset", "split", "file_name"),
+        reads_vectors=True,
     ),
     GoldTable.CROP_EMBEDDINGS: _TableLayout(
         schema=GOLD_CROP_EMBEDDING_SCHEMA,
         key="box_id",
         reads_boxes=True,
-        embedding_join=("box_id",),
+        reads_vectors=True,
     ),
 }
 
@@ -99,31 +103,6 @@ def read_gold_page(
     those of the current gold. The train rows are always those of the current gold.
     """
     layout = _LAYOUTS[table]
-    rows = _read_rows(
-        store=store,
-        paths=paths,
-        manifest=manifest,
-        release=release,
-        layout=layout,
-        row_filter=row_filter,
-    )
-    # A full page can have a successor. A short page is the last one.
-    is_full = rows.num_rows == row_filter.limit
-    return GoldPage(
-        rows=rows,
-        next_after=rows.column(layout.key)[-1].as_py() if is_full else None,
-    )
-
-
-def _read_rows(
-    *,
-    store: LakeStore,
-    paths: CvLakePaths,
-    manifest: GoldManifest,
-    release: ReleaseManifest | None,
-    layout: _TableLayout,
-    row_filter: ImageFilter,
-) -> pa.Table:
     gold_files, embedding_files = _select_files(
         paths=paths,
         manifest=manifest,
@@ -131,8 +110,8 @@ def _read_rows(
         layout=layout,
         row_filter=row_filter,
     )
-    if not gold_files or (layout.embedding_join is not None and not embedding_files):
-        return layout.schema.empty_table()
+    if not gold_files or (layout.reads_vectors and not embedding_files):
+        return GoldPage(rows=layout.schema.empty_table(), next_after=None)
 
     parameters: dict[str, object] = {"gold": gold_files, "limit": row_filter.limit}
     conditions = _build_selection_conditions(
@@ -144,19 +123,11 @@ def _read_rows(
     if isinstance(row_filter, BoxFilter) and row_filter.class_name:
         conditions.append("list_contains($class_names, g.class_name)")
         parameters["class_names"] = row_filter.class_name
-
-    if layout.embedding_join is None:
-        selected, joined = "g.*", ""
-    else:
-        selected = f"g.{layout.key}, e.embedding"
-        join_columns = ", ".join(layout.embedding_join)
-        joined = f"join read_parquet($embeddings) e using ({join_columns})"
-        parameters["embeddings"] = embedding_files
     where = f"where {' and '.join(conditions)}" if conditions else ""
+    selected = f"g.{layout.key}" if layout.reads_vectors else "g.*"
     query = f"""
     select {selected}
     from read_parquet($gold) g
-    {joined}
     {where}
     order by g.{layout.key}
     limit $limit
@@ -165,7 +136,40 @@ def _read_rows(
         # A timestamp then reaches Arrow in UTC, whatever the machine is set to.
         connection.execute("set TimeZone = 'UTC'")
         rows = connection.execute(query=query, parameters=parameters).to_arrow_table()
-    return rows.cast(layout.schema)
+        # A full page can have a successor. A short page is the last one. The page of
+        # ids decides, because an id can lack a vector.
+        next_after = (
+            rows.column(layout.key)[-1].as_py()
+            if rows.num_rows == row_filter.limit
+            else None
+        )
+        if layout.reads_vectors:
+            rows = _read_vectors(
+                connection=connection,
+                key=layout.key,
+                page=rows,
+                embedding_files=embedding_files,
+            )
+    return GoldPage(rows=rows.cast(layout.schema), next_after=next_after)
+
+
+def _read_vectors(
+    *,
+    connection: duckdb.DuckDBPyConnection,
+    key: str,
+    page: pa.Table,
+    embedding_files: list[str],
+) -> pa.Table:
+    connection.register(view_name="page", python_object=page)
+    return connection.execute(
+        query=f"""
+        select page.{key}, e.embedding
+        from page
+        join read_parquet($embeddings) e using ({key})
+        order by page.{key}
+        """,
+        parameters={"embeddings": embedding_files},
+    ).to_arrow_table()
 
 
 def count_gold_images(

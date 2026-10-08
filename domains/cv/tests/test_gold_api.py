@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
@@ -155,6 +156,31 @@ def test_embeddings_join_the_silver_vectors_onto_gold_ids(client: TestClient) ->
     assert set(crops.column("box_id").to_pylist()) == {
         row["box_id"] for row in _rows(client=client, path="/v1/boxes")
     }
+
+
+def test_a_box_with_no_vector_does_not_end_the_paging(
+    client: TestClient, embedding_lake: CvLakeResource
+) -> None:
+    """A page of vectors can be short, so its cursor comes from the page of ids."""
+    boxes = [row["box_id"] for row in _rows(client=client, path="/v1/boxes")]
+    first = min(boxes)
+    for path in embedding_lake.store.root.glob("silver/*/crop_embeddings/*.parquet"):
+        table = pq.read_table(path)
+        kept = [box_id != first for box_id in table.column("box_id").to_pylist()]
+        pq.write_table(table.filter(pa.array(kept)), path)
+
+    seen: list[str] = []
+    after: str | None = None
+    while True:
+        params: dict[str, object] = {"release": "draft", "limit": 1}
+        if after is not None:
+            params["after"] = after
+        body = client.get(url="/v1/crop_embeddings", params=params).json()
+        seen.extend(row["box_id"] for row in body["rows"])
+        after = body["next_after"]
+        if after is None:
+            break
+    assert seen == sorted(set(boxes) - {first})
 
 
 def test_crop_embeddings_filter_by_class(client: TestClient) -> None:

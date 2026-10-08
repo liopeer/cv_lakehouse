@@ -43,7 +43,12 @@ VECTOR_TABLES = (GoldTable.EMBEDDINGS, GoldTable.CROP_EMBEDDINGS)
 def create_app_from_env() -> FastAPI:
     settings = CvSettings()
     return create_app(
-        LakeStore(root=settings.root, storage_options=settings.storage_options)
+        LakeStore(
+            root=settings.root,
+            storage_options=settings.storage_options,
+            duckdb_threads=settings.duckdb_threads,
+            duckdb_memory_limit=settings.duckdb_memory_limit,
+        )
     )
 
 

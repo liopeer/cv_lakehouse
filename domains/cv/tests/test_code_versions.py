@@ -43,13 +43,17 @@ def test_a_category_map_change_marks_one_silver_asset_stale(
     assert after["open_images"] == before["open_images"]
 
 
+@pytest.mark.parametrize(
+    argnames=("name", "value"),
+    argvalues=[("EMBEDDING_MODEL", "mobileclip_s2"), ("EMBEDDING_VERSION", "next")],
+)
 def test_a_new_embedding_model_marks_every_silver_asset_stale(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
 ) -> None:
     """The vectors are part of silver, so a model swap has to rebuild the layer."""
     before = _silver_versions()
 
-    monkeypatch.setattr(target=silver, name="EMBEDDING_MODEL", value="mobileclip_s2")
+    monkeypatch.setattr(target=silver, name=name, value=value)
 
     after = _silver_versions()
     assert all(after[name] != before[name] for name in before)
