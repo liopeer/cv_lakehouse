@@ -88,6 +88,7 @@ def build_bronze_asset(source: PublishedSource[BronzeManifest]) -> dg.AssetsDefi
                 bronze_dir=copy_dir,
                 workers=lake.download_workers,
                 timeout=lake.request_timeout_seconds,
+                disk_lease=lake.disk_lease,
                 log=context.log,
             )
             mode = BronzeMode.DOWNLOAD

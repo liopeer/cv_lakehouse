@@ -344,6 +344,16 @@ that dies starts again. An archive unpacks from the store into the store, member
 member. A linked copy stays where it is, local or remote, and the manifest records its
 location: link one with `source_dir`, such as `s3://datasets/coco2017`.
 
+On a local HDD, set a lock file for the disk lease:
+
+```bash
+export CV_LAKEHOUSE_DISK_LEASE_PATH=/var/lib/lakehouse/disk.lock
+```
+
+Then only one unit of heavy I/O uses the disk at a time: one unpack, one checksum, or
+one silver split. A run that waits logs the work that holds the disk. Leave it unset
+for S3 or an SSD. Two domains on one disk set the same path. See ADR 0012.
+
 Set `LAKEHOUSE_TEST_S3_ENDPOINT` to run the S3 tests against a real S3, such as
 SeaweedFS, instead of moto.
 

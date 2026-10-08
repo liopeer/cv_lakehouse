@@ -28,6 +28,7 @@ import httpx
 from pydantic import BaseModel
 from upath import UPath
 
+from lakehouse_core.disk_lease import NO_DISK_LEASE
 from lakehouse_core.published_files import (
     Checksum,
     ChecksumKind,
@@ -100,6 +101,8 @@ def fetch_new_snapshots(
             published_file=published_file,
             bronze_dir=corrections_dir,
             client=client,
+            # A snapshot is one small Parquet file, so its checksum needs no lease.
+            disk_lease=NO_DISK_LEASE,
             log=log,
         )
         snapshots.append(

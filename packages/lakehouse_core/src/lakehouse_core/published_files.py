@@ -32,6 +32,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 from upath import UPath
 
+from lakehouse_core.disk_lease import DiskLease
 from lakehouse_core.lake_store import is_local
 from lakehouse_core.remote_archives import unpack_remote_archive
 from lakehouse_core.s3_uploads import ResumableUpload, choose_part_size
@@ -166,6 +167,7 @@ def download_published_files(
     bronze_dir: Path | UPath,
     workers: int,
     timeout: float,
+    disk_lease: DiskLease,
     log: logging.Logger,
 ) -> None:
     """Download, verify and unpack every file, several at a time."""
@@ -178,6 +180,7 @@ def download_published_files(
                 published_file=published_file,
                 bronze_dir=bronze_dir,
                 client=client,
+                disk_lease=disk_lease,
                 log=log,
             ),
             published_files,
@@ -191,6 +194,7 @@ def download_published_file(
     published_file: PublishedFile,
     bronze_dir: Path | UPath,
     client: httpx.Client,
+    disk_lease: DiskLease,
     log: logging.Logger,
 ) -> Path | UPath:
     """Download one file, resuming a partial download, and verify it."""
@@ -199,6 +203,7 @@ def download_published_file(
             published_file=published_file,
             bronze_dir=Path(str(bronze_dir)),
             client=client,
+            disk_lease=disk_lease,
             log=log,
         )
     target = bronze_dir / published_file.path
@@ -218,6 +223,7 @@ def _download_to_disk(
     published_file: PublishedFile,
     bronze_dir: Path,
     client: httpx.Client,
+    disk_lease: DiskLease,
     log: logging.Logger,
 ) -> Path:
     target = bronze_dir / published_file.path
@@ -234,7 +240,10 @@ def _download_to_disk(
         _stream_to_file(
             url=published_file.url, partial=partial, offset=offset, client=client
         )
-    _verify(path=partial, published_file=published_file)
+    with disk_lease.hold(
+        target=partial, reason=f"Verifying {published_file.path}", log=log
+    ):
+        _verify(path=partial, published_file=published_file)
     partial.rename(target)
     return target
 
@@ -280,14 +289,21 @@ def _download_and_unpack(
     published_file: PublishedFile,
     bronze_dir: Path | UPath,
     client: httpx.Client,
+    disk_lease: DiskLease,
     log: logging.Logger,
 ) -> None:
     path = download_published_file(
-        published_file=published_file, bronze_dir=bronze_dir, client=client, log=log
+        published_file=published_file,
+        bronze_dir=bronze_dir,
+        client=client,
+        disk_lease=disk_lease,
+        log=log,
     )
     if published_file.unpacked_path is not None:
-        log.info(f"Unpacking {published_file.path}, unless it is unpacked")
-        unpack_archive_beside(path)
+        reason = f"Unpacking {published_file.path}"
+        log.info(f"{reason}, unless it is unpacked")
+        with disk_lease.hold(target=path, reason=reason, log=log):
+            unpack_archive_beside(path)
 
 
 def _download_to_s3(
