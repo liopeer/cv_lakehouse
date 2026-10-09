@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/liopeer/cv_lakehouse/compare/v0.5.0...v0.6.0) (2026-10-09)
+
+
+### Features
+
+* limit heavy I/O on a local disk with an opt-in lease ([#56](https://github.com/liopeer/cv_lakehouse/issues/56)) ([6563e17](https://github.com/liopeer/cv_lakehouse/commit/6563e17f814dcde6e9f4d24968fd9b0dcbb8ff7a))
+* sort silver vectors by id, reuse them across runs, and log progress ([#57](https://github.com/liopeer/cv_lakehouse/issues/57)) ([b396559](https://github.com/liopeer/cv_lakehouse/commit/b396559183c4e60d0e24b564564dde4fc9906d8f))
+
+
+### Bug Fixes
+
+* move a release on S3 without copying directories ([#53](https://github.com/liopeer/cv_lakehouse/issues/53)) ([11e2944](https://github.com/liopeer/cv_lakehouse/commit/11e294449ed83661e104201e09ea6fc1b9cc576b))
+
 ## [0.5.0](https://github.com/liopeer/cv_lakehouse/compare/v0.4.0...v0.5.0) (2026-10-07)
 
 
