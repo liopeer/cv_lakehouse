@@ -190,16 +190,6 @@ A run writes new vectors to closed parts of 65536 vectors, beside the file. If a
 stops, the next run reuses every closed part. The run log reports the progress of each
 step once a minute, with the rate and the time left.
 
-A file that silver wrote before ADR 0013 has no id column and no footer. Move it to the
-new layout once, with no new embedding:
-
-```bash
-python -m lakehouse_cv.maintenance.sort_silver_embeddings [DATASET ...]
-```
-
-The command reads the lake from the same variables as the code location. It skips a
-file of the new layout, so it can run again after it stops.
-
 ### The class registry
 
 `CanonicalClass` in `domains/cv/src/lakehouse_cv/contract/class_registry.py` holds the vocabulary that

@@ -34,5 +34,6 @@ Their rows were in the order of the boxes file.
 - A page of vectors reads a few row groups, whatever the size of the split.
 - A change to silver that keeps the pixels and the crops embeds nothing again.
 - New weights behind the same model name need a bump of `EMBEDDING_VERSION`.
-- A file of the old layout is moved once with `lakehouse_cv.maintenance.sort_silver_embeddings`.
-  The command sends no request to the server.
+- A file of the old layout was moved once with `lakehouse_cv.maintenance.sort_silver_embeddings`,
+  which sent no request to the server. It shipped in 0.6.0 and was removed after every lake
+  was moved. It is in the git history.
