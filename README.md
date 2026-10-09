@@ -184,13 +184,13 @@ drawn box is. The run metadata counts the vectors it reused.
 The footer of an embedding file names the model and `EMBEDDING_VERSION`. A file of
 another model or version is embedded again. A new model behind the same name is not
 detected: bump `EMBEDDING_VERSION`. See
-[ADR 0012](docs/adr/0012-silver-vectors-are-sorted-and-kept.md).
+[ADR 0013](docs/adr/0013-silver-vectors-are-sorted-and-kept.md).
 
 A run writes new vectors to closed parts of 65536 vectors, beside the file. If a run
 stops, the next run reuses every closed part. The run log reports the progress of each
 step once a minute, with the rate and the time left.
 
-A file that silver wrote before ADR 0012 has no id column and no footer. Move it to the
+A file that silver wrote before ADR 0013 has no id column and no footer. Move it to the
 new layout once, with no new embedding:
 
 ```bash
@@ -368,6 +368,16 @@ that dies resumes after the last part that S3 holds. On another object store a d
 that dies starts again. An archive unpacks from the store into the store, member by
 member. A linked copy stays where it is, local or remote, and the manifest records its
 location: link one with `source_dir`, such as `s3://datasets/coco2017`.
+
+On a local HDD, set a lock file for the disk lease:
+
+```bash
+export CV_LAKEHOUSE_DISK_LEASE_PATH=/var/lib/lakehouse/disk.lock
+```
+
+Then only one unit of heavy I/O uses the disk at a time: one unpack, one checksum, or
+one silver split. A run that waits logs the work that holds the disk. Leave it unset
+for S3 or an SSD. Two domains on one disk set the same path. See ADR 0012.
 
 Set `LAKEHOUSE_TEST_S3_ENDPOINT` to run the S3 tests against a real S3, such as
 SeaweedFS, instead of moto.

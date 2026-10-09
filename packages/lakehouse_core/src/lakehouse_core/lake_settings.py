@@ -27,3 +27,6 @@ class LakeSettings(BaseSettings):
     # means the DuckDB default: every core of the machine, and 80% of its memory.
     duckdb_threads: int | None = Field(default=None, ge=1)
     duckdb_memory_limit: str | None = None
+    # The lock file of the disk lease, such as /var/lib/lakehouse/disk.lock. Set it only
+    # for a disk that suffers from contention, such as an HDD. See ADR 0012.
+    disk_lease_path: str | None = None

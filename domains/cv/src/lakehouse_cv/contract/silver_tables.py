@@ -14,7 +14,7 @@ bytes, and most queries over silver want the boxes and not the vectors.
 
 An embedding file is sorted by its id, in small row groups, so a reader of a few ids
 skips the rest of the file. A crop embedding row holds the pixel crop that made its
-vector. The footer names the model. ADR 0012 records why.
+vector. The footer names the model. ADR 0013 records why.
 
 Every dataset writes the same columns. A source that knows nothing about `attr_blur`
 leaves it null, which costs almost nothing in Parquet and keeps a multi dataset

@@ -221,7 +221,7 @@ def clear_vectors(silver_dir: UPath, split: str) -> None:
 def holds_vectors_of_this_model(*, table: VectorTable, path: UPath) -> bool:
     """Tell an embedding file of this layout whose footer names the model of this code.
 
-    A file of the layout before ADR 0012 has no such footer, and fails the test.
+    A file of the layout before ADR 0013 has no such footer, and fails the test.
     """
     try:
         schema = read_parquet_schema(path)

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Move the silver embedding files to the layout of ADR 0012, with no new embedding.
+"""Move the silver embedding files to the layout of ADR 0013, with no new embedding.
 
     python -m lakehouse_cv.maintenance.sort_silver_embeddings [DATASET ...]
 

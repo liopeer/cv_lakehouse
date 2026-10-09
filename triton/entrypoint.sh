@@ -109,4 +109,11 @@ else
     export TRITON_CACHE_DIR="${cache}/triton"
 fi
 
+# A restarted container keeps the /dev/shm of its pod, and with it the shared-memory
+# regions of the Python backend that a killed Triton never removed. They fill /dev/shm,
+# and every request that needs a new region fails. No Triton runs in this container
+# yet, so none of them is in use. A /dev/shm shared with another Triton, as with
+# --ipc=host, would lose that Triton's regions too.
+rm -f /dev/shm/triton_python_backend_shm_region_*
+
 exec tritonserver --model-repository=/models "$@"

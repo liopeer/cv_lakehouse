@@ -2,7 +2,7 @@
 SPDX-License-Identifier: MIT
 Copyright (c) 2025–2026 Lionel Peer
 -->
-# ADR 0012: Silver vectors are sorted by their id, and kept across runs
+# ADR 0013: Silver vectors are sorted by their id, and kept across runs
 
 - Status: accepted
 - Date: 2026-10-08

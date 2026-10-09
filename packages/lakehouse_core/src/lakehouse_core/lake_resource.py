@@ -5,9 +5,11 @@
 """The resource that gives every asset the lake root."""
 
 import json
+from pathlib import Path
 
 import dagster as dg
 
+from lakehouse_core.disk_lease import DiskLease
 from lakehouse_core.lake_paths import LakePaths
 from lakehouse_core.lake_store import LakeStore
 
@@ -21,11 +23,18 @@ class LakeResource(dg.ConfigurableResource):
     storage_options: str = "{}"
     download_workers: int
     request_timeout_seconds: float
+    disk_lease_path: str | None = None
 
     @property
     def store(self) -> LakeStore:
         return LakeStore(
             root=self.root, storage_options=json.loads(self.storage_options)
+        )
+
+    @property
+    def disk_lease(self) -> DiskLease:
+        return DiskLease(
+            None if self.disk_lease_path is None else Path(self.disk_lease_path)
         )
 
     @property
