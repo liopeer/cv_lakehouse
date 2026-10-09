@@ -1,7 +1,7 @@
 [project]
 name = "lakehouse-core"
 requires-python = ">=3.12,<3.15"
-version = "0.5.0"
+version = "0.6.0"
 description = "The parts of the lakehouse that know no domain: bronze, paths and manifests."
 authors = [{ name = "Lionel Peer" }]
 license = "MIT"
