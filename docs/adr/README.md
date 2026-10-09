@@ -44,3 +44,4 @@ An ADR records one decision about the architecture, and the reason for it.
 | [0009](0009-corrections-are-bronze-snapshots.md) | Corrections are bronze snapshots |
 | [0010](0010-eval-splits-are-numbered-releases.md) | Eval splits are frozen as numbered releases |
 | [0011](0011-gold-serves-stable-shards.md) | The gold API serves stable shards of the images |
+| [0012](0012-heavy-io-on-a-local-disk-takes-a-lease.md) | Heavy I/O on a local disk takes a lease |

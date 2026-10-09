@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from lakehouse_core import published_files
+from lakehouse_core.disk_lease import NO_DISK_LEASE
 from lakehouse_core.published_files import (
     Checksum,
     ChecksumKind,
@@ -75,6 +76,7 @@ def test_downloads_and_verifies_a_file(tmp_path: Path) -> None:
         published_file=_published_file(),
         bronze_dir=tmp_path,
         client=server.client(),
+        disk_lease=NO_DISK_LEASE,
         log=LOG,
     )
     assert path == tmp_path / "data" / "file.bin"
@@ -91,6 +93,7 @@ def test_resumes_a_partial_download(tmp_path: Path) -> None:
         published_file=_published_file(),
         bronze_dir=tmp_path,
         client=server.client(),
+        disk_lease=NO_DISK_LEASE,
         log=LOG,
     )
     assert server.ranges == ["bytes=300-"]
@@ -106,6 +109,7 @@ def test_skips_a_file_that_is_there(tmp_path: Path) -> None:
         published_file=_published_file(),
         bronze_dir=tmp_path,
         client=server.client(),
+        disk_lease=NO_DISK_LEASE,
         log=LOG,
     )
     assert server.ranges == []
@@ -118,6 +122,7 @@ def test_rejects_a_checksum_mismatch_and_keeps_no_file(tmp_path: Path) -> None:
             published_file=_published_file(),
             bronze_dir=tmp_path,
             client=_Server(tampered).client(),
+            disk_lease=NO_DISK_LEASE,
             log=LOG,
         )
     assert not (tmp_path / "data" / "file.bin").exists()

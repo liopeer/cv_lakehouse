@@ -148,38 +148,43 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 category_map=spec.category_map,
                 default_class=spec.default_class,
             )
-            previous = (
-                stash_previous_split(silver_dir=silver_dir, split=split)
-                if reuses_embeddings
-                else None
-            )
-            written_images, written_boxes = write_split(
-                silver_dir=silver_dir,
-                dataset=name,
-                split=split,
-                images=overlay.apply_to_silver_images(
-                    split=split,
-                    images=normalizer.normalize_to_silver_images(
-                        read_raw_images(
-                            source=source, bronze_dir=bronze_dir, split=split
-                        )
-                    ),
-                ),
-            )
-            if embedder is None:
-                clear_embeddings(silver_dir=silver_dir, split=split)
-                written_vectors, written_crops, reused = 0, 0, 0
-            else:
-                written_vectors, written_crops, reused = _embed_split(
-                    store=lake.store,
-                    embedder=embedder,
+            # The lease also covers the embeddings, because Triton reads the images
+            # by path.
+            with lake.disk_lease.hold(
+                target=bronze_dir, reason=f"Silver {name} {split}", log=context.log
+            ):
+                previous = (
+                    stash_previous_split(silver_dir=silver_dir, split=split)
+                    if reuses_embeddings
+                    else None
+                )
+                written_images, written_boxes = write_split(
                     silver_dir=silver_dir,
                     dataset=name,
                     split=split,
-                    image_root=bronze.image_roots[split],
-                    previous=previous,
+                    images=overlay.apply_to_silver_images(
+                        split=split,
+                        images=normalizer.normalize_to_silver_images(
+                            read_raw_images(
+                                source=source, bronze_dir=bronze_dir, split=split
+                            )
+                        ),
+                    ),
                 )
-            discard_previous_split(silver_dir=silver_dir, split=split)
+                if embedder is None:
+                    clear_embeddings(silver_dir=silver_dir, split=split)
+                    written_vectors, written_crops, reused = 0, 0, 0
+                else:
+                    written_vectors, written_crops, reused = _embed_split(
+                        store=lake.store,
+                        embedder=embedder,
+                        silver_dir=silver_dir,
+                        dataset=name,
+                        split=split,
+                        image_root=bronze.image_roots[split],
+                        previous=previous,
+                    )
+                discard_previous_split(silver_dir=silver_dir, split=split)
             num_reused_embeddings += reused
             num_images += written_images
             num_boxes += written_boxes

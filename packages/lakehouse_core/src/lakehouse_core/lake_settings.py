@@ -23,3 +23,6 @@ class LakeSettings(BaseSettings):
     storage_options: dict[str, Any] = Field(default_factory=dict)
     download_workers: int = Field(default=16, ge=1, le=64)
     request_timeout_seconds: float = Field(default=60.0, gt=0)
+    # The lock file of the disk lease, such as /var/lib/lakehouse/disk.lock. Set it only
+    # for a disk that suffers from contention, such as an HDD. See ADR 0012.
+    disk_lease_path: str | None = None

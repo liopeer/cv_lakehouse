@@ -19,6 +19,7 @@ import pytest
 from upath import UPath
 
 from lakehouse_core import published_files
+from lakehouse_core.disk_lease import NO_DISK_LEASE
 from lakehouse_core.published_files import (
     UNVERIFIED_SUFFIX,
     Checksum,
@@ -102,6 +103,7 @@ def _download(bronze_dir: UPath, server: _Server, content: bytes = CONTENT) -> U
         published_file=_published_file(content),
         bronze_dir=bronze_dir,
         client=server.client(),
+        disk_lease=NO_DISK_LEASE,
         log=LOG,
     )
     assert isinstance(path, UPath)
