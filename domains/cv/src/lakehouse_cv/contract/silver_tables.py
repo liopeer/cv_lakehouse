@@ -8,9 +8,13 @@ Two files per split. One row per image, and one row per box that joins back to i
 `(dataset, split, file_name)`. A row per box alone would lose an image that carries no
 box, and a detector needs those negatives.
 
-Two more files hold the MobileCLIP embeddings, one per image and one per box crop, on
-the same keys. They are separate files because a vector is 2 KB next to a box row of a
-few dozen bytes, and most queries over silver want the boxes and not the vectors.
+Two more files hold the MobileCLIP embeddings, one per image and one per box crop.
+They are separate files because a vector is 2 KB next to a box row of a few dozen
+bytes, and most queries over silver want the boxes and not the vectors.
+
+An embedding file is sorted by its id, in small row groups, so a reader of a few ids
+skips the rest of the file. A crop embedding row holds the pixel crop that made its
+vector. The footer names the model. ADR 0013 records why.
 
 Every dataset writes the same columns. A source that knows nothing about `attr_blur`
 leaves it null, which costs almost nothing in Parquet and keeps a multi dataset
@@ -97,8 +101,18 @@ EMBEDDING_SCHEMA = pa.schema(
         pa.field(name="dataset", type=pa.string(), nullable=False),
         pa.field(name="split", type=pa.string(), nullable=False),
         pa.field(name="file_name", type=pa.string(), nullable=False),
+        pa.field(name="image_id", type=pa.string(), nullable=False),
         _EMBEDDING_FIELD,
     ]
+)
+
+# The box rounded onto the pixel grid, as the server cropped it. A box that moves less
+# than half a pixel keeps its crop, and therefore its vector.
+CROP_COLUMNS: tuple[pa.Field, ...] = (
+    pa.field(name="crop_x", type=pa.int32(), nullable=False),
+    pa.field(name="crop_y", type=pa.int32(), nullable=False),
+    pa.field(name="crop_width", type=pa.int32(), nullable=False),
+    pa.field(name="crop_height", type=pa.int32(), nullable=False),
 )
 
 CROP_EMBEDDING_SCHEMA = pa.schema(
@@ -108,9 +122,17 @@ CROP_EMBEDDING_SCHEMA = pa.schema(
         pa.field(name="file_name", type=pa.string(), nullable=False),
         pa.field(name="box_id", type=pa.string(), nullable=False),
         pa.field(name="box_index", type=pa.int32(), nullable=False),
+        *CROP_COLUMNS,
         _EMBEDDING_FIELD,
     ]
 )
+
+# The footer keys that name the model of every vector in an embedding file, and the
+# version of the code around it.
+EMBEDDING_MODEL_METADATA_KEY = b"embedding_model"
+EMBEDDING_VERSION_METADATA_KEY = b"embedding_version"
+# A row group of 1024 vectors is 2 MB. A page of a few thousand ids reads a few of them.
+EMBEDDING_ROWS_PER_ROW_GROUP = 1024
 
 SILVER_TABLES: tuple[TableSpec, ...] = (
     TableSpec(
@@ -131,15 +153,15 @@ SILVER_TABLES: tuple[TableSpec, ...] = (
         name="embeddings",
         layer=Layer.SILVER,
         schema=EMBEDDING_SCHEMA,
-        key=("dataset", "split", "file_name"),
-        description="One MobileCLIP vector per image.",
+        key=("image_id",),
+        description="One MobileCLIP vector per image, sorted by `image_id`.",
     ),
     TableSpec(
         name="crop_embeddings",
         layer=Layer.SILVER,
         schema=CROP_EMBEDDING_SCHEMA,
         key=("box_id",),
-        description="One MobileCLIP vector per box crop.",
+        description="One MobileCLIP vector per box crop, sorted by `box_id`.",
     ),
 )
 

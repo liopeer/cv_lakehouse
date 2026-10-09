@@ -28,9 +28,18 @@ LOCAL_PROTOCOLS = (None, "file", "local")
 class LakeStore:
     """Resolve the locations in the lake, and open its Parquet in pyarrow and DuckDB."""
 
-    def __init__(self, *, root: str, storage_options: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        *,
+        root: str,
+        storage_options: Mapping[str, Any],
+        duckdb_threads: int | None = None,
+        duckdb_memory_limit: str | None = None,
+    ) -> None:
         self.storage_options = dict(storage_options)
         self.root = to_upath(location=root, storage_options=self.storage_options)
+        self.duckdb_threads = duckdb_threads
+        self.duckdb_memory_limit = duckdb_memory_limit
 
     @property
     def protocol(self) -> str | None:
@@ -68,7 +77,14 @@ class LakeStore:
         fsspec. Every other remote protocol goes through the fsspec filesystem of the
         root.
         """
-        with duckdb.connect(config=_duckdb_config()) as connection:
+        config = _duckdb_config()
+        # DuckDB counts the cores of the machine, not the CPU limit of a container, and
+        # its memory limit leaves out the memory of Python and Arrow.
+        if self.duckdb_threads is not None:
+            config["threads"] = self.duckdb_threads
+        if self.duckdb_memory_limit is not None:
+            config["memory_limit"] = self.duckdb_memory_limit
+        with duckdb.connect(config=config) as connection:
             if self.protocol in ("s3", "s3a"):
                 _configure_s3(
                     connection=connection, storage_options=self.storage_options

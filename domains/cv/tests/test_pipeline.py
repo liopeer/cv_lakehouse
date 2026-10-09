@@ -170,20 +170,17 @@ def test_silver_embeds_every_image_and_every_box(
         images_file(silver_dir=silver_dir, split="train")
     )
     assert crops.num_rows == num_rows(boxes_file(silver_dir=silver_dir, split="train"))
-    # The key of the boxes file, so a join needs nothing else.
-    assert crops.column("file_name").to_pylist() == boxes_of(silver_dir)
-    assert (
-        crops.column("box_id")
-        == pq.read_table(boxes_file(silver_dir=silver_dir, split="train"))["box_id"]
+    # The keys of the boxes file, so a join needs nothing else, in the order of the id.
+    boxes = pq.read_table(boxes_file(silver_dir=silver_dir, split="train"))
+    pairs = zip(
+        boxes.column("box_id").to_pylist(),
+        boxes.column("file_name").to_pylist(),
+        strict=True,
     )
-
-
-def boxes_of(silver_dir: UPath) -> list[str]:
-    return (
-        pq.read_table(boxes_file(silver_dir=silver_dir, split="train"))
-        .column("file_name")
-        .to_pylist()
-    )
+    assert crops.select(["box_id", "file_name"]).to_pylist() == [
+        {"box_id": box_id, "file_name": file_name}
+        for box_id, file_name in sorted(pairs)
+    ]
 
 
 def classes_of(silver_dir: UPath, split: str) -> dict[str, int]:

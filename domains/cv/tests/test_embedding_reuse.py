@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""A silver rebuild embeds only what the run before left without a vector."""
+"""A silver rebuild embeds only what no earlier run embedded with the same model."""
 
 from collections.abc import Sequence
 from pathlib import Path
@@ -225,20 +225,24 @@ def test_a_drawn_box_is_embedded_and_a_deleted_box_loses_its_row(
     assert crop.path.endswith(HANDSHAKING)
     vectors = reuse_lake.read_crop_vectors()
     assert DRAWN in vectors and FACE not in vectors
-    # The rows keep the order of the boxes file.
+    # One row per box, in the order of the id.
     boxes = pq.read_table(boxes_file(silver_dir=reuse_lake.silver_dir, split="train"))
-    assert list(vectors) == boxes.column("box_id").to_pylist()
+    assert list(vectors) == sorted(boxes.column("box_id").to_pylist())
 
 
-def test_a_rebuild_on_new_code_embeds_everything_again(
+def test_a_rebuild_on_new_code_reuses_every_vector(
     reuse_lake: _Lake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A vector depends on the pixels, the crop and the model, and on no other code."""
+    images = reuse_lake.read_image_vectors()
+    crops = reuse_lake.read_crop_vectors()
     monkeypatch.setattr(target=silver_defs, name="SILVER_LOGIC_VERSION", value="next")
 
     reuse_lake.build_silver()
 
-    assert len(reuse_lake.embedder.paths) == 4
-    assert len(reuse_lake.embedder.crops) == 3
+    assert (reuse_lake.embedder.paths, reuse_lake.embedder.crops) == ([], [])
+    assert reuse_lake.read_image_vectors() == images
+    assert reuse_lake.read_crop_vectors() == crops
 
 
 def test_a_rebuild_leaves_no_working_file_behind(reuse_lake: _Lake) -> None:

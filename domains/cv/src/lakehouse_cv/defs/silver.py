@@ -5,15 +5,15 @@
 """Silver assets: one dataset, normalised onto the class registry, written as Parquet.
 
 When `CV_LAKEHOUSE_TRITON_URL` names a server, the same run also embeds every image
-and every box crop with MobileCLIP. A run on the same code keeps the vector of an
-image, and of a box that did not move, from the run before.
+and every box crop with MobileCLIP. A run embeds only an image or a crop that no earlier
+run embedded with the same model, also one that stopped halfway.
 """
 
 # Dagster resolves the resource annotations at runtime, so this module must not
 # postpone its annotations.
 
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 import dagster as dg
 import duckdb
@@ -41,20 +41,16 @@ from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.sources.base import read_raw_images
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.correction_overlay import CorrectionOverlay
-from lakehouse_cv.transforms.embeddings import (
-    EMBEDDING_MODEL,
-    Embedder,
-    PreviousSplit,
-    TritonEmbedder,
-    clear_embeddings,
-    discard_previous_split,
-    reuse_or_embed_crops,
-    reuse_or_embed_images,
-    stash_previous_split,
-    write_crop_embeddings,
-    write_image_embeddings,
+from lakehouse_cv.transforms.embedding_files import (
+    CROP_VECTORS,
+    EMBEDDING_VERSION,
+    IMAGE_VECTORS,
+    clear_vectors,
+    write_vectors,
 )
+from lakehouse_cv.transforms.embeddings import EMBEDDING_MODEL, Embedder, TritonEmbedder
 from lakehouse_cv.transforms.normalization import RawImageNormalizer
+from lakehouse_cv.transforms.progress_log import ProgressLog, iter_with_progress
 from lakehouse_cv.transforms.silver_writer import write_split
 
 # Clipping writes a coordinate back as a float, so a box that ends exactly on the edge
@@ -79,6 +75,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             class_registry_sha256_fingerprint(),
             spec.category_map_sha256_fingerprint,
             EMBEDDING_MODEL,
+            EMBEDDING_VERSION,
         ]
     )
 
@@ -113,27 +110,13 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             else lake.paths.corrections_dir(name) / snapshot.file.path
         )
 
-        embedder: Embedder | None = (
+        embedder = (
             TritonEmbedder(lake.triton_url) if lake.triton_url is not None else None
         )
         if embedder is None:
             context.log.warning(
                 "CV_LAKEHOUSE_TRITON_URL is unset, so this run writes no embedding."
             )
-
-        # A vector of the run before is still right when only the corrections changed
-        # since: the same code, on the same model, over the pixels that bronze pins.
-        previous_manifest_path = silver_dir / SILVER_MANIFEST
-        reuses_embeddings = (
-            embedder is not None
-            and previous_manifest_path.exists()
-            and _describes_this_code(
-                manifest=read_manifest(
-                    path=previous_manifest_path, model=SilverManifest
-                ),
-                code_version=code_version,
-            )
-        )
 
         # Counted by the writer as it streams, not read back off the Parquet. These
         # go to the run log and the Dagster metadata, and no further: a materialisation
@@ -153,38 +136,36 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             with lake.disk_lease.hold(
                 target=bronze_dir, reason=f"Silver {name} {split}", log=context.log
             ):
-                previous = (
-                    stash_previous_split(silver_dir=silver_dir, split=split)
-                    if reuses_embeddings
-                    else None
-                )
                 written_images, written_boxes = write_split(
                     silver_dir=silver_dir,
                     dataset=name,
                     split=split,
-                    images=overlay.apply_to_silver_images(
-                        split=split,
-                        images=normalizer.normalize_to_silver_images(
-                            read_raw_images(
-                                source=source, bronze_dir=bronze_dir, split=split
-                            )
+                    images=iter_with_progress(
+                        items=overlay.apply_to_silver_images(
+                            split=split,
+                            images=normalizer.normalize_to_silver_images(
+                                read_raw_images(
+                                    source=source, bronze_dir=bronze_dir, split=split
+                                )
+                            ),
+                        ),
+                        progress=ProgressLog(
+                            log=context.log.info, label=f"{split} images normalised"
                         ),
                     ),
                 )
                 if embedder is None:
-                    clear_embeddings(silver_dir=silver_dir, split=split)
+                    clear_vectors(silver_dir=silver_dir, split=split)
                     written_vectors, written_crops, reused = 0, 0, 0
                 else:
                     written_vectors, written_crops, reused = _embed_split(
                         store=lake.store,
                         embedder=embedder,
                         silver_dir=silver_dir,
-                        dataset=name,
                         split=split,
                         image_root=bronze.image_roots[split],
-                        previous=previous,
+                        log=context.log.info,
                     )
-                discard_previous_split(silver_dir=silver_dir, split=split)
             num_reused_embeddings += reused
             num_images += written_images
             num_boxes += written_boxes
@@ -234,48 +215,38 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
     return _silver
 
 
-def _describes_this_code(manifest: SilverManifest, code_version: str) -> bool:
-    return (
-        manifest.code_version == code_version
-        and manifest.embedding_model == EMBEDDING_MODEL
-    )
-
-
 def _embed_split(
     *,
     store: LakeStore,
     embedder: Embedder,
     silver_dir: UPath,
-    dataset: str,
     split: str,
     image_root: str,
-    previous: PreviousSplit | None,
+    log: Callable[[str], None],
 ) -> tuple[int, int, int]:
     """Embed the images and the box crops of one split.
 
-    Return the image count, the crop count, and how many vectors of the two came from
-    the run before.
+    Return the image count, the crop count, and how many vectors of the two an earlier
+    run made.
     """
-    target = {
-        "embedder": embedder,
-        "silver_dir": silver_dir,
-        "dataset": dataset,
-        "split": split,
-        # A lake on an object store reaches Triton as presigned URLs, made batch by
-        # batch, just before each request.
-        "locate_image": build_reader_locator(
-            store.resolve(image_root), expires_seconds=PRESIGNED_URL_SECONDS
-        ),
-    }
-    if previous is None:
-        return write_image_embeddings(**target), write_crop_embeddings(**target), 0
-    num_embeddings, reused_images = reuse_or_embed_images(
-        **target, store=store, previous=previous
+    # A lake on an object store reaches Triton as presigned URLs, made batch by batch,
+    # just before each request.
+    locate_image = build_reader_locator(
+        store.resolve(image_root), expires_seconds=PRESIGNED_URL_SECONDS
     )
-    num_crops, reused_crops = reuse_or_embed_crops(
-        **target, store=store, previous=previous
+    images, crops = (
+        write_vectors(
+            store=store,
+            embedder=embedder,
+            table=table,
+            silver_dir=silver_dir,
+            split=split,
+            locate_image=locate_image,
+            log=log,
+        )
+        for table in (IMAGE_VECTORS, CROP_VECTORS)
     )
-    return num_embeddings, num_crops, reused_images + reused_crops
+    return images.written, crops.written, images.reused + crops.reused
 
 
 def _build_run_metadata(

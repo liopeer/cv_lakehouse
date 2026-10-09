@@ -145,7 +145,8 @@ L2 normalised, so a cosine similarity is a dot product.
 
 They are separate files because a vector is 2 KB next to a box row of a few dozen bytes,
 and most queries over silver want the boxes. The keys are the keys of the other two
-files, so a join needs nothing else:
+files, so a join needs nothing else. A file is sorted by `image_id` or `box_id`, so a
+query on a few ids reads a few row groups:
 
 ```bash
 duckdb -c "select b.class_name, count(*)
@@ -175,14 +176,29 @@ The server resolves the path itself, so the stack mounts `$CV_LAKEHOUSE_ROOT` re
 at the same path inside the container. If bronze links a copy outside the root, add a
 mount for that path to the compose file of the stack.
 
-A silver rebuild on the same code embeds only what has no vector yet. An image keeps
-its vector, because bronze pins the pixels. A box keeps its vector when its four
-coordinates are equal to the run before, so a relabelled box is not embedded again, and
-a moved or a drawn box is. The run metadata counts the vectors it reused.
+A silver rebuild embeds only what has no vector yet, on any code. An image keeps its
+vector, because bronze pins the pixels. A box keeps its vector while its crop on the
+pixel grid is the same, so a relabelled box is not embedded again, and a moved or a
+drawn box is. The run metadata counts the vectors it reused.
 
-A rebuild on other code embeds the dataset again. The model name is part of the silver
-`code_version`, so a new model marks every silver asset stale, and then no vector is
-reused. A new model behind the same name is not detected: bump `SILVER_LOGIC_VERSION`.
+The footer of an embedding file names the model and `EMBEDDING_VERSION`. A file of
+another model or version is embedded again. A new model behind the same name is not
+detected: bump `EMBEDDING_VERSION`. See
+[ADR 0013](docs/adr/0013-silver-vectors-are-sorted-and-kept.md).
+
+A run writes new vectors to closed parts of 65536 vectors, beside the file. If a run
+stops, the next run reuses every closed part. The run log reports the progress of each
+step once a minute, with the rate and the time left.
+
+A file that silver wrote before ADR 0013 has no id column and no footer. Move it to the
+new layout once, with no new embedding:
+
+```bash
+python -m lakehouse_cv.maintenance.sort_silver_embeddings [DATASET ...]
+```
+
+The command reads the lake from the same variables as the code location. It skips a
+file of the new layout, so it can run again after it stops.
 
 ### The class registry
 
@@ -312,7 +328,8 @@ never changes, so a consumer that keeps `num_shards` keeps its images. See
 
 A parameter that is given more than once matches any of its values. The rows come in
 the order of their id. A full page carries `next_after`, and the next request sends it
-as `after`.
+as `after`. A page of vectors can hold fewer rows than `limit` and still carry it, as an
+id can lack a vector. Read until a page has no `next_after`.
 
 The answer is JSON. With `Accept: application/vnd.apache.arrow.stream` it is an Arrow
 IPC stream in the gold schema, and the cursor is in the `X-Next-After` header.
@@ -333,6 +350,14 @@ export CV_LAKEHOUSE_STORAGE_OPTIONS='{"key": "...", "secret": "...", "endpoint_u
 `CV_LAKEHOUSE_STORAGE_OPTIONS` is JSON, and passes to fsspec as the options of the
 root. DuckDB reads S3 with its httpfs extension, from the same options. A manifest
 stores every location relative to the root, so the lake moves as one tree.
+
+DuckDB uses every core of the machine, also in a container with a CPU limit. Its memory
+limit leaves out the memory of Python and Arrow. In a container, set both:
+
+```bash
+export CV_LAKEHOUSE_DUCKDB_THREADS=4
+export CV_LAKEHOUSE_DUCKDB_MEMORY_LIMIT=2GB
+```
 
 Every layer runs on any root. On a local root, silver sends Triton image paths, and the
 container mounts the lake. On an object store, silver sends presigned URLs, valid for an
@@ -367,8 +392,8 @@ $CV_LAKEHOUSE_ROOT/
   silver/<dataset>/
     images/<split>.parquet           one row per image
     boxes/<split>.parquet            one row per box, XYWH pixels, exact floats
-    embeddings/<split>.parquet       one MobileCLIP vector per image
-    crop_embeddings/<split>.parquet  one MobileCLIP vector per box crop
+    embeddings/<split>.parquet       one MobileCLIP vector per image, by image_id
+    crop_embeddings/<split>.parquet  one MobileCLIP vector per box crop, by box_id
   gold/
     _gold.json                       the current version, and its datasets
     versions/<n>/images/<dataset>/<split>.parquet   one row per image
