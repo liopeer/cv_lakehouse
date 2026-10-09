@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.4.0...triton-v0.4.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **triton:** clear the shared memory that a killed triton left behind ([#44](https://github.com/liopeer/cv_lakehouse/issues/44)) ([fbc5e05](https://github.com/liopeer/cv_lakehouse/commit/fbc5e058904afe2cd8efee3280dcc5ed66f64017))
+
 ## [0.4.0](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.3.0...triton-v0.4.0) (2026-10-05)
 
 
