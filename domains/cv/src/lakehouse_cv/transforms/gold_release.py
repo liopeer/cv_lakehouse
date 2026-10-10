@@ -30,7 +30,7 @@ from lakehouse_cv.contract.manifests import (
     ReleaseManifest,
 )
 from lakehouse_cv.settings import CvLakePaths
-from lakehouse_cv.transforms.gold_build import read_gold_manifest
+from lakehouse_cv.transforms.layer_builds import read_gold_build
 
 READ_CHUNK_SIZE = 1024 * 1024
 _READ_ONLY = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
@@ -59,11 +59,11 @@ def read_release_manifest(paths: CvLakePaths, release: int) -> ReleaseManifest:
     )
 
 
-def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManifest:
-    """Copy the val and test files of the current gold build into the next release."""
-    gold = read_gold_manifest(paths)
-    if gold is None:
-        raise RuntimeError("Gold is not materialized, so there is nothing to release.")
+def write_eval_release(
+    *, paths: CvLakePaths, gold_build_id: str, created_at: datetime
+) -> ReleaseManifest:
+    """Copy the val and test files of one gold build into the next release."""
+    gold = read_gold_build(paths=paths, build_id=gold_build_id)
     numbers = list_release_numbers(paths)
     release = numbers[-1] + 1 if numbers else 1
     release_dir = paths.gold_release_dir(release)
@@ -111,6 +111,7 @@ def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManif
     manifest = ReleaseManifest(
         release=release,
         created_at=created_at,
+        gold_build_id=gold.build_id,
         gold_code_version=gold.code_version,
         datasets=datasets,
         files=files,

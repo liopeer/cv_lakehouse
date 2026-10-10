@@ -34,6 +34,7 @@ from tests.lake_runs import (
     find_silver_files,
     materialize_assets,
     materialize_bronze_links,
+    read_silver_build_ids,
 )
 
 SPECS = [source.spec for source in SOURCE_BY_NAME.values()]
@@ -57,6 +58,9 @@ def client(
         store=embedding_lake.store,
         paths=embedding_lake.paths,
         specs=SPECS,
+        silver_build_ids=read_silver_build_ids(
+            lake=embedding_lake, names=[spec.name for spec in SPECS]
+        ),
         code_version="test",
         built_at=FIRST_BUILD,
     )
@@ -227,7 +231,10 @@ def test_a_box_that_moved_after_its_vector_gets_none(
         store=embedding_lake.store,
         paths=embedding_lake.paths,
         specs=SPECS,
-        code_version="test",
+        silver_build_ids=read_silver_build_ids(
+            lake=embedding_lake, names=[spec.name for spec in SPECS]
+        ),
+        code_version="moved",
         built_at=FIRST_BUILD,
     )
 

@@ -40,6 +40,7 @@ from tests.lake_runs import (
     find_silver_files,
     materialize_assets,
     materialize_bronze_links,
+    read_silver_build_ids,
 )
 
 DATASET = "wider_face"
@@ -316,6 +317,9 @@ def test_gold_carries_what_a_curator_changed(
         store=lake.store,
         paths=lake.paths,
         specs=[SOURCE_BY_NAME[DATASET].spec],
+        silver_build_ids=read_silver_build_ids(
+            lake=lake, names=[spec.name for spec in [SOURCE_BY_NAME[DATASET].spec]]
+        ),
         code_version="test",
         built_at=datetime(2026, 1, 1, tzinfo=UTC),
     )

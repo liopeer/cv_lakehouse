@@ -86,6 +86,12 @@ A run writes a new build under `builds/`, checks every box, and only then replac
 `_silver.json`, which names the build. A run that fails leaves the last good build in
 place. Silver keeps the current build and the one before it.
 
+The id of a build digests the code version and the inputs: bronze and the event files
+for silver, the silver build for the embeddings, and the silver builds for gold. A run
+on the same inputs writes nothing. Each asset reports its build id to Dagster as its
+data version, and the asset downstream reads that build by its id. See
+[ADR 0015](docs/adr/0015-every-asset-is-a-pure-function.md).
+
 Every dataset writes the same columns and leaves the ones it knows nothing about null, so
 a scan across datasets needs no `union_by_name`. An `attr_*` column holds a per box
 attribute:
@@ -247,8 +253,9 @@ a rebuild from the same silver gives the same rows.
 | wider_face | train, val | train, val |
 | pp4av | test, fisheye | test, test |
 
-Gold has no versions. A build writes a new directory under `gold/builds/`, with a random
-name, and then replaces `_gold.json`, which names the current build. A reader takes the
+Gold has no versions. A build writes a new directory under `gold/builds/`, named by a
+digest of the code version and the silver builds, and then replaces `_gold.json`, which
+names the current build. A reader takes the
 build from `_gold.json`, so it never sees a half written build. Gold keeps the current
 build and the one before it. `_gold.json` also names the silver build of each dataset.
 

@@ -16,6 +16,7 @@ from lakehouse_cv.defs.corrections import (
 )
 from lakehouse_cv.defs.resources import CvLakeResource
 from tests.export_fakes import EXPORT_URL, FakeExportServer
+from tests.lake_runs import run_assets
 
 DATASET = "wider_face"
 MOVED = {
@@ -63,9 +64,9 @@ def export_lake(lake: CvLakeResource) -> CvLakeResource:
 def _materialize(
     lake: CvLakeResource, raise_on_error: bool = True
 ) -> dg.ExecuteInProcessResult:
-    return dg.materialize(
+    return run_assets(
         assets=[build_corrections_asset(DATASET)],
-        resources={"lake": lake},
+        lake=lake,
         raise_on_error=raise_on_error,
     )
 

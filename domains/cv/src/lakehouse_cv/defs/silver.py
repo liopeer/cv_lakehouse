@@ -42,10 +42,11 @@ from lakehouse_cv.sources.base import read_raw_images
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.correction_overlay import CorrectionOverlay
 from lakehouse_cv.transforms.layer_builds import (
-    create_build_id,
+    derive_build_id,
     discard_build,
     publish_build,
     read_silver_manifest,
+    reuse_whole_build,
     silver_build_dir,
 )
 from lakehouse_cv.transforms.normalization import RawImageNormalizer
@@ -89,14 +90,34 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
     def _silver(
         context: dg.AssetExecutionContext, lake: CvLakeResource
     ) -> dg.MaterializeResult:
-        bronze = read_manifest(
-            path=lake.paths.bronze_dir(name) / BRONZE_MANIFEST, model=CvBronzeManifest
-        )
+        bronze_path = lake.paths.bronze_dir(name) / BRONZE_MANIFEST
+        bronze = read_manifest(path=bronze_path, model=CvBronzeManifest)
         bronze_dir = lake.store.resolve(bronze.path)
         silver_dir = lake.paths.silver_dir(name)
-        build_id = create_build_id()
-        staged_dir = build_dir(layer_dir=silver_dir, build_id=build_id)
         corrections = read_corrections_manifest(paths=lake.paths, name=name)
+        # Bronze pins every file it names, and an event file never changes, so the
+        # manifests name the inputs.
+        build_id = derive_build_id(
+            [
+                code_version,
+                bronze_path.read_text(),
+                *(
+                    f"{event_file.chain_id}/{event_file.event_file_id}"
+                    for event_file in corrections.event_files
+                ),
+            ]
+        )
+        if reuse_whole_build(
+            manifest_path=silver_dir / SILVER_MANIFEST,
+            build_id=build_id,
+            model=SilverManifest,
+        ):
+            context.log.info(f"Build {build_id} is whole, so this run writes nothing.")
+            return dg.MaterializeResult(
+                data_version=dg.DataVersion(build_id),
+                metadata={"build_id": build_id, "is_reused": True},
+            )
+        staged_dir = build_dir(layer_dir=silver_dir, build_id=build_id)
         overlay = CorrectionOverlay.from_event_files(
             list_event_paths(
                 paths=lake.paths,
@@ -172,14 +193,16 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             ),
         )
         return dg.MaterializeResult(
+            data_version=dg.DataVersion(build_id),
             metadata=_build_run_metadata(
+                build_id=build_id,
                 license_name=spec.license,
                 num_images=num_images,
                 num_boxes=num_boxes,
                 dropped_box_reasons=dropped_box_reasons,
                 num_event_files=len(corrections.event_files),
                 num_corrections_applied=overlay.num_applied,
-            )
+            ),
         )
 
     return _silver
@@ -209,6 +232,7 @@ def find_box_problems(
 
 def _build_run_metadata(
     *,
+    build_id: str,
     license_name: str,
     num_images: int,
     num_boxes: int,
@@ -218,6 +242,8 @@ def _build_run_metadata(
 ) -> dict:
     """What this run did, for the Dagster UI. Not persisted beside the data."""
     return {
+        "build_id": build_id,
+        "is_reused": False,
         "dagster/row_count": num_images,
         "num_boxes": num_boxes,
         "license": license_name,

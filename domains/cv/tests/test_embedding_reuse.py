@@ -265,6 +265,7 @@ def test_a_rebuild_leaves_no_working_file_behind(reuse_lake: _Lake) -> None:
     assert names == {"_embeddings.json", "builds"}
     current = find_embedding_files(lake=reuse_lake.resource, name=DATASET)
     assert {path.name for path in current.rglob("*") if path.is_file()} == {
+        "_build.json",
         "train.parquet",
         "val.parquet",
     }

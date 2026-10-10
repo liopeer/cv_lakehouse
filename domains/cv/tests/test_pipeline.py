@@ -43,6 +43,7 @@ from tests.lake_runs import (
     find_silver_files,
     materialize_assets,
     materialize_bronze_links,
+    run_assets,
 )
 
 
@@ -74,9 +75,9 @@ def test_bronze_rejects_a_link_to_an_incomplete_copy(
     """WIDER_test holds no label, and bronze needs it all the same."""
     shutil.rmtree(bronze_sources["wider_face"] / "WIDER_test")
     asset = build_bronze_asset(SOURCE_BY_NAME["wider_face"])
-    result = dg.materialize(
+    result = run_assets(
         assets=[asset],
-        resources={"lake": lake},
+        lake=lake,
         run_config=dg.RunConfig(
             ops={
                 asset.op.name: {
@@ -154,7 +155,7 @@ def test_silver_writes_no_embedding(
         path.name
         for path in find_silver_files(lake=embedding_lake, name="wider_face").iterdir()
     }
-    assert names == {"images", "boxes"}
+    assert names == {"_build.json", "images", "boxes"}
 
 
 def test_the_embeddings_fail_without_a_server(
@@ -163,9 +164,9 @@ def test_the_embeddings_fail_without_a_server(
     materialize_bronze_links(lake=lake, sources=bronze_sources)
     materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("wider_face")])
 
-    result = dg.materialize(
+    result = run_assets(
         assets=[embeddings_defs.build_embeddings_asset("wider_face")],
-        resources={"lake": lake},
+        lake=lake,
         raise_on_error=False,
     )
 
@@ -238,16 +239,19 @@ def test_a_silver_run_with_an_invalid_box_keeps_the_last_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     materialize_bronze_links(lake=lake, sources=bronze_sources)
-    asset = silver_defs.build_silver_asset("wider_face")
-    materialize_assets(lake=lake, assets=[asset])
+    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("wider_face")])
     manifest_path = lake.paths.silver_dir("wider_face") / SILVER_MANIFEST
     before = manifest_path.read_text()
+    # New rules, so a new build, and rules that reject every box.
+    monkeypatch.setattr(target=silver_defs, name="SILVER_LOGIC_VERSION", value="next")
     monkeypatch.setattr(
         target=silver_defs, name="EDGE_TOLERANCE_PIXELS", value=-1_000.0
     )
 
-    result = dg.materialize(
-        assets=[asset], resources={"lake": lake}, raise_on_error=False
+    result = run_assets(
+        assets=[silver_defs.build_silver_asset("wider_face")],
+        lake=lake,
+        raise_on_error=False,
     )
 
     assert not result.success
@@ -257,10 +261,15 @@ def test_a_silver_run_with_an_invalid_box_keeps_the_last_build(
 
 
 def test_silver_keeps_the_current_build_and_the_one_before(
-    lake: CvLakeResource, bronze_sources: dict[str, Path]
+    lake: CvLakeResource,
+    bronze_sources: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     materialize_bronze_links(lake=lake, sources=bronze_sources)
-    for _ in range(3):
+    for version in ("a", "b", "c"):
+        monkeypatch.setattr(
+            target=silver_defs, name="SILVER_LOGIC_VERSION", value=version
+        )
         materialize_assets(
             lake=lake, assets=[silver_defs.build_silver_asset("wider_face")]
         )
@@ -270,17 +279,43 @@ def test_silver_keeps_the_current_build_and_the_one_before(
     assert find_silver_files(lake=lake, name="wider_face").exists()
 
 
+def test_a_silver_run_on_the_same_inputs_writes_nothing(
+    lake: CvLakeResource, bronze_sources: dict[str, Path]
+) -> None:
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
+    first = materialize_assets(
+        lake=lake, assets=[silver_defs.build_silver_asset("wider_face")]
+    )
+    boxes = boxes_file(
+        build_dir=find_silver_files(lake=lake, name="wider_face"), split="train"
+    )
+    written = boxes.stat().st_mtime_ns
+
+    second = materialize_assets(
+        lake=lake, assets=[silver_defs.build_silver_asset("wider_face")]
+    )
+
+    assert boxes.stat().st_mtime_ns == written
+    versions = [
+        result.get_asset_materialization_events()[0].materialization.tags
+        for result in (first, second)
+    ]
+    assert versions[0] == versions[1]
+    (materialization,) = second.get_asset_materialization_events()
+    assert materialization.materialization.metadata["is_reused"].value is True
+
+
 def test_silver_checks_pass(
     lake: CvLakeResource, bronze_sources: dict[str, Path]
 ) -> None:
     materialize_bronze_links(lake=lake, sources=bronze_sources)
     for name in DATASETS:
-        result = dg.materialize(
+        result = run_assets(
             assets=[
                 silver_defs.build_silver_asset(name),
                 *silver_defs.build_silver_checks(name),
             ],
-            resources={"lake": lake},
+            lake=lake,
         )
         assert result.success
         evaluations = result.get_asset_check_evaluations()

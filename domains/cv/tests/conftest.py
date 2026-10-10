@@ -2,15 +2,26 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
+from collections.abc import Iterator
 from pathlib import Path
 
+import dagster as dg
 import pytest
 from upath import UPath
 
 from lakehouse_cv.defs import silver_embeddings as embeddings_defs
 from lakehouse_cv.defs.resources import CvLakeResource
+from tests import lake_runs
 from tests.fakes import FakeEmbedder
 from tests.fixtures import make_all
+
+
+@pytest.fixture(autouse=True)
+def dagster_instance() -> Iterator[dg.DagsterInstance]:
+    with dg.DagsterInstance.ephemeral() as instance:
+        lake_runs.use_instance(instance)
+        yield instance
+        lake_runs.use_instance(None)
 
 
 @pytest.fixture

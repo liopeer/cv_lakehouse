@@ -31,22 +31,32 @@ earlier output of its own, no clock and no environment.
    fact about the run.
 2. Gold has no versions. An eval release is the only frozen copy of gold. It names the
    gold code version and the silver build of each dataset.
-3. Silver, the embeddings and gold write each run to `builds/<random id>/`, check it,
-   and then replace the manifest that names the build. A run that fails leaves the last
+3. Silver, the embeddings and gold write each run to `builds/<id>/`, check it, and
+   then replace the manifest that names the build. A run that fails leaves the last
    good build. A layer keeps the current build and the one before it, for a reader that
    read the manifest just before the swap.
-4. The vectors are the asset `silver/<dataset>_embeddings`. It reads the current silver
+4. The id of a build is a digest of the code version and the ids of its inputs. A run
+   whose build is whole writes nothing, and points the manifest at it. A whole build
+   holds a copy of its manifest, written last, and a run never rewrites it.
+5. An asset reports its build id to Dagster as its data version. A downstream asset
+   reads the build that Dagster recorded for its upstream, by its id. The manifest
+   beside `builds/` serves only a reader outside Dagster, such as the gold API.
+6. The vectors are the asset `silver/<dataset>_embeddings`. It reads the current silver
    build, and fails when the Triton server is unset or unreachable. It never deletes a
    vector. The server URL stays a resource: it says where the server is, not what the
    asset does.
-5. The gold API serves a crop vector only for the crop of the gold box, so a box that
+7. The gold API serves a crop vector only for the crop of the gold box, so a box that
    moved after its vector was made gets none.
-6. Gold joins every registered dataset, and fails on a dataset with no silver. A lake
+8. Gold joins every registered dataset, and fails on a dataset with no silver. A lake
    that holds only some datasets names them in the config of the gold asset.
 
 ## Consequences
 
-- A rebuild from bronze gives the same silver and gold rows.
+- A rebuild from bronze gives the same silver and gold rows, under the same build ids.
+- Dagster's lineage names the exact build that each run read, and a downstream asset is
+  stale only when its upstream build changes.
+- A change that is in no code version, such as a constant of the normaliser, reuses the
+  old build. Bump the logic version of the layer.
 - Silver means the same on any machine. A machine with no server builds silver and
   gold, and fails the embeddings.
 - A change to the class rules reruns silver. The embeddings then reuse every vector

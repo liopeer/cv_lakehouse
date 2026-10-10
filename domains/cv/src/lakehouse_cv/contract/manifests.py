@@ -20,6 +20,9 @@ EMBEDDINGS_MANIFEST = "_embeddings.json"
 GOLD_MANIFEST = "_gold.json"
 CORRECTIONS_MANIFEST = "_corrections.json"
 RELEASE_MANIFEST = "_release.json"
+# The copy of the manifest inside a build directory. A run writes it after every other
+# file of the build, so a build that holds it is whole.
+BUILD_MANIFEST = "_build.json"
 
 
 class CvBronzeManifest(BronzeManifest):
@@ -96,7 +99,8 @@ def build_dir(*, layer_dir: UPath, build_id: str) -> UPath:
 class BuildManifest(BaseModel):
     """The manifest of a layer that writes each run to a new directory."""
 
-    # The directory under `builds/` that holds the files of this run.
+    # The directory under `builds/` that holds the files of this run. A digest of the
+    # code version and the inputs, so equal inputs give an equal build.
     build_id: str
 
 
@@ -180,6 +184,7 @@ class ReleaseManifest(BaseModel):
 
     release: int
     created_at: datetime
+    gold_build_id: str
     gold_code_version: str
     # The datasets as gold held them, with only their val and test splits. Each names
     # the silver build that it came from.

@@ -13,6 +13,7 @@ import dagster as dg
 
 from lakehouse_cv.defs.gold import GOLD_KEY
 from lakehouse_cv.defs.resources import CvLakeResource
+from lakehouse_cv.defs.upstream_builds import read_upstream_build_id
 from lakehouse_cv.transforms.gold_release import (
     IdenticalReleaseError,
     find_changed_release_files,
@@ -35,16 +36,21 @@ def build_eval_release_asset() -> dg.AssetsDefinition:
             "round of corrections is done."
         ),
     )
-    def _eval_release(lake: CvLakeResource) -> dg.MaterializeResult:
+    def _eval_release(
+        context: dg.AssetExecutionContext, lake: CvLakeResource
+    ) -> dg.MaterializeResult:
         try:
             manifest = write_eval_release(
-                paths=lake.paths, created_at=datetime.now(tz=UTC)
+                paths=lake.paths,
+                gold_build_id=read_upstream_build_id(context=context, key=GOLD_KEY),
+                created_at=datetime.now(tz=UTC),
             )
         except IdenticalReleaseError as error:
             raise dg.Failure(description=str(error)) from error
         return dg.MaterializeResult(
             metadata={
                 "release": manifest.release,
+                "gold_build_id": manifest.gold_build_id,
                 "gold_code_version": manifest.gold_code_version,
                 "datasets": [dataset.dataset for dataset in manifest.datasets],
                 "num_files": len(manifest.files),

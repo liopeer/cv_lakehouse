@@ -4,7 +4,8 @@
 #
 """Embedding assets: one MobileCLIP vector per image and per box crop of silver.
 
-The asset reads the current silver build, and fails when no Triton server is set. A run
+The asset reads the silver build that Dagster recorded, and fails when no Triton server
+is set. A run
 embeds only an image or a crop that no earlier run embedded with the same model, also
 one that stopped halfway. A change to the class rules reruns silver, and this asset then
 reuses every vector whose pixels and crop are the same.
@@ -26,6 +27,7 @@ from lakehouse_cv.contract.manifests import (
     build_dir,
 )
 from lakehouse_cv.defs.resources import CvLakeResource
+from lakehouse_cv.defs.upstream_builds import read_upstream_build_id
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.embedding_files import (
     EMBEDDING_VERSION,
@@ -35,11 +37,12 @@ from lakehouse_cv.transforms.embedding_files import (
 )
 from lakehouse_cv.transforms.embeddings import EMBEDDING_MODEL, TritonEmbedder
 from lakehouse_cv.transforms.layer_builds import (
-    create_build_id,
+    derive_build_id,
     embeddings_build_dir,
     publish_build,
     read_embeddings_manifest,
-    read_silver_manifest,
+    read_silver_build,
+    reuse_whole_build,
     silver_build_dir,
 )
 
@@ -75,13 +78,28 @@ def build_embeddings_asset(name: str) -> dg.AssetsDefinition:
                 description="CV_LAKEHOUSE_TRITON_URL is unset, so nothing can embed."
             )
         embedder = TritonEmbedder(lake.triton_url)
-        silver = read_silver_manifest(paths=lake.paths, name=name)
+        silver = read_silver_build(
+            paths=lake.paths,
+            name=name,
+            build_id=read_upstream_build_id(
+                context=context, key=dg.AssetKey(["silver", name])
+            ),
+        )
         rows_dir = silver_build_dir(paths=lake.paths, manifest=silver)
         bronze = read_manifest(
             path=lake.paths.bronze_dir(name) / BRONZE_MANIFEST, model=CvBronzeManifest
         )
         embeddings_dir = lake.paths.embeddings_dir(name)
-        build_id = create_build_id()
+        build_id = derive_build_id([code_version, silver.build_id])
+        if reuse_whole_build(
+            manifest_path=embeddings_dir / EMBEDDINGS_MANIFEST,
+            build_id=build_id,
+            model=EmbeddingsManifest,
+        ):
+            return dg.MaterializeResult(
+                data_version=dg.DataVersion(build_id),
+                metadata={"build_id": build_id, "is_reused": True},
+            )
         staged_dir = build_dir(layer_dir=embeddings_dir, build_id=build_id)
         previous = read_embeddings_manifest(paths=lake.paths, name=name)
         reusable_dirs = [
@@ -151,11 +169,14 @@ def build_embeddings_asset(name: str) -> dg.AssetsDefinition:
             ),
         )
         return dg.MaterializeResult(
+            data_version=dg.DataVersion(build_id),
             metadata={
+                "build_id": build_id,
+                "is_reused": False,
                 **{f"num_{label.replace(' ', '_')}": n for label, n in written.items()},
                 "num_reused_embeddings": num_reused,
                 "embedding_model": EMBEDDING_MODEL,
-            }
+            },
         )
 
     return _embeddings

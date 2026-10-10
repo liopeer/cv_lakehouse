@@ -9,12 +9,14 @@ flagged boxes. Nothing else: a build reads no earlier gold, so a rebuild from th
 silver gives the same rows.
 
 A build never touches the build a reader has open. It writes a new directory, then
-replaces the manifest that points at it, then removes the builds nothing points at.
+replaces the manifest that points at it, then removes the builds nothing points at. The
+id of a build digests the code version and the silver builds, so a run on the same
+silver writes nothing.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -47,9 +49,10 @@ from lakehouse_cv.contract.silver_tables import (
 )
 from lakehouse_cv.settings import CvLakePaths
 from lakehouse_cv.transforms.layer_builds import (
-    create_build_id,
+    derive_build_id,
     publish_build,
-    read_silver_manifest,
+    read_silver_build,
+    reuse_whole_build,
     silver_build_dir,
 )
 
@@ -78,8 +81,9 @@ where not ({" or ".join(f"coalesce({name}, false)" for name in FLAG_COLUMNS)})
 @dataclass(frozen=True)
 class GoldBuild:
     manifest: GoldManifest
-    num_images: int
-    num_boxes: int
+    # None for a build that an earlier run wrote.
+    num_images: int | None
+    num_boxes: int | None
 
 
 def read_gold_manifest(paths: CvLakePaths) -> GoldManifest | None:
@@ -94,24 +98,41 @@ def build_gold(
     store: LakeStore,
     paths: CvLakePaths,
     specs: Sequence[DatasetSpec],
+    silver_build_ids: Mapping[str, str],
     code_version: str,
     built_at: datetime,
 ) -> GoldBuild:
-    """Join the current silver of every dataset in `specs`.
+    """Join the given silver build of every dataset in `specs`.
 
-    A dataset with no silver fails the build. Gold holds its declared inputs, not what
-    happens to be on disk.
+    A dataset with no silver build fails the build. Gold holds its declared inputs, not
+    what happens to be on disk.
     """
     if not specs:
         raise ValueError("Gold needs at least one dataset.")
-    build_id = create_build_id()
+    missing = [spec.name for spec in specs if spec.name not in silver_build_ids]
+    if missing:
+        raise ValueError(f"No silver build is given for {missing}.")
+    build_id = derive_build_id(
+        [
+            code_version,
+            *(f"{spec.name}/{silver_build_ids[spec.name]}" for spec in specs),
+        ]
+    )
+    manifest_path = paths.gold_dir() / GOLD_MANIFEST
+    whole = reuse_whole_build(
+        manifest_path=manifest_path, build_id=build_id, model=GoldManifest
+    )
+    if whole is not None:
+        return GoldBuild(manifest=whole, num_images=None, num_boxes=None)
     gold_dir = paths.gold_build_dir(build_id)
 
     datasets: list[GoldDataset] = []
     num_images = num_boxes = 0
     with store.duckdb() as connection:
         for spec in specs:
-            silver = read_silver_manifest(paths=paths, name=spec.name)
+            silver = read_silver_build(
+                paths=paths, name=spec.name, build_id=silver_build_ids[spec.name]
+            )
             silver_dir = silver_build_dir(paths=paths, manifest=silver)
             splits: list[GoldSplit] = []
             for split in silver.splits:
@@ -169,7 +190,7 @@ def build_gold(
         code_version=code_version,
         datasets=datasets,
     )
-    publish_build(manifest_path=paths.gold_dir() / GOLD_MANIFEST, manifest=manifest)
+    publish_build(manifest_path=manifest_path, manifest=manifest)
     return GoldBuild(manifest=manifest, num_images=num_images, num_boxes=num_boxes)
 
 

@@ -13,6 +13,7 @@ import dagster as dg
 
 from lakehouse_core.fingerprints import sha256_fingerprint
 from lakehouse_cv.defs.resources import CvLakeResource
+from lakehouse_cv.defs.upstream_builds import read_upstream_build_id
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.gold_build import build_gold, read_gold_manifest
 
@@ -46,28 +47,43 @@ def build_gold_asset() -> dg.AssetsDefinition:
             "silver fails the run."
         ),
     )
-    def _gold(config: GoldConfig, lake: CvLakeResource) -> dg.MaterializeResult:
+    def _gold(
+        context: dg.AssetExecutionContext, config: GoldConfig, lake: CvLakeResource
+    ) -> dg.MaterializeResult:
         unknown = set(config.datasets or []) - set(SOURCE_BY_NAME)
         if unknown:
             raise dg.Failure(description=f"No such dataset: {sorted(unknown)}")
+        selected = [
+            spec
+            for spec in specs
+            if config.datasets is None or spec.name in config.datasets
+        ]
         build = build_gold(
             store=lake.store,
             paths=lake.paths,
-            specs=[
-                spec
-                for spec in specs
-                if config.datasets is None or spec.name in config.datasets
-            ],
+            specs=selected,
+            silver_build_ids={
+                spec.name: read_upstream_build_id(
+                    context=context, key=dg.AssetKey(["silver", spec.name])
+                )
+                for spec in selected
+            },
             code_version=code_version,
             built_at=datetime.now(tz=UTC),
         )
+        counts = (
+            {}
+            if build.num_images is None
+            else {"dagster/row_count": build.num_images, "num_boxes": build.num_boxes}
+        )
         return dg.MaterializeResult(
+            data_version=dg.DataVersion(build.manifest.build_id),
             metadata={
                 "build_id": build.manifest.build_id,
+                "is_reused": build.num_images is None,
                 "datasets": [dataset.dataset for dataset in build.manifest.datasets],
-                "dagster/row_count": build.num_images,
-                "num_boxes": build.num_boxes,
-            }
+                **counts,
+            },
         )
 
     return _gold
