@@ -226,6 +226,8 @@ them can enforce its own licence rule.
 ### Gold
 
 Gold joins the silver datasets into one table set. A consumer reads gold and no silver.
+Gold is a pure function of silver: it reads no earlier gold, no clock and no setting, so
+a rebuild from the same silver gives the same rows.
 
 - A row carries `image_id` or `box_id`, the dataset, the split and a role.
 - A role is `train`, `val` or `test`. Each source maps its own split names onto the
@@ -234,9 +236,7 @@ Gold joins the silver datasets into one table set. A consumer reads gold and no 
   rejected stay in silver.
 - `image_path` is relative to the lake root, so gold names a pixel on any machine. A pixel
   of a copy that bronze links from outside the lake keeps its absolute path or URL.
-- `changed_at` is the build that last changed the row. A row that a rebuild leaves
-  equal keeps its time.
-- Gold copies no embedding. The vectors stay in the silver files.
+- Gold copies no embedding. The vectors stay in the embeddings assets.
 
 | Dataset | Split | Role |
 | --- | --- | --- |
@@ -244,32 +244,43 @@ Gold joins the silver datasets into one table set. A consumer reads gold and no 
 | wider_face | train, val | train, val |
 | pp4av | test, fisheye | test, test |
 
-A build writes a new directory under `gold/versions/`, and then replaces `_gold.json`,
-which names the current version. A reader takes the version from `_gold.json`, so it
-never sees a half written build. Gold keeps the current version and the one before it.
+Gold has no versions. A build writes a new directory under `gold/builds/`, with a random
+name, and then replaces `_gold.json`, which names the current build. A reader takes the
+build from `_gold.json`, so it never sees a half written build. Gold keeps the current
+build and the one before it. `_gold.json` also names the silver build of each dataset.
 
 ```bash
+build=$(jq -r .build_id "$CV_LAKEHOUSE_ROOT/gold/_gold.json")
 duckdb -c "select dataset, role, class_name, count(*)
-           from read_parquet('$CV_LAKEHOUSE_ROOT/gold/versions/1/boxes/*/*.parquet')
+           from read_parquet('$CV_LAKEHOUSE_ROOT/gold/builds/$build/boxes/*/*.parquet')
            group by all"
 ```
 
-A dataset with no silver on disk is left out, and the run logs its name.
+Gold joins every registered dataset, and a dataset with no silver fails the run. A lake
+that holds only some datasets names them in the run config of `gold/current`:
+
+```yaml
+ops:
+  gold__current:
+    config:
+      datasets: [pp4av]
+```
 
 ### Eval releases
 
 Gold changes with every correction, and a benchmark must not. The asset
 `gold/eval_release` freezes the val and test rows of every dataset under a number.
 
-- Each run copies the val and test files of the current gold version to
+- Each run copies the val and test files of the current gold build to
   `gold/releases/<number>/`, and writes `_release.json` with the checksum of every file.
 - A release never changes. The check `releases_are_unchanged` verifies every checksum.
 - The curators keep working on the gold above it. Their fixes to a val or a test row
   reach the next release, and no earlier one.
 - The run fails when the val and test rows are those of the last release.
 - One number covers every dataset, so a benchmark names one release.
-- `_release.json` names the gold version, the silver code version and the correction
-  snapshot of each dataset.
+- `_release.json` names the gold code version, and the silver build, the silver code
+  version and the correction snapshot of each dataset. A release is the only frozen copy
+  of gold.
 - A release holds no vector.
 
 Run the asset by hand, when a round of corrections is done.
@@ -285,7 +296,7 @@ curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face&releas
 
 | Endpoint | Rows |
 | --- | --- |
-| `/v1/meta` | the gold manifest: the version, the datasets, the splits and their roles |
+| `/v1/meta` | the gold manifest: the build, the datasets, the splits and their roles, and the model of the vectors |
 | `/v1/releases`, `/v1/releases/{n}` | the eval releases, each with its files |
 | `/v1/classes` | the class registry, also before gold exists |
 | `/v1/images` | one per image |
@@ -300,7 +311,6 @@ curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face&releas
 | `release` | which val and test rows: the number of a release, or `draft` |
 | `class_name` | boxes of these classes. Not on `/v1/images` and `/v1/embeddings` |
 | `commercial_use` | rows of the datasets with this licence answer |
-| `changed_since` | rows that a gold build changed after this time |
 | `shard`, `num_shards` | the images of one shard, and their boxes and vectors |
 | `limit`, `after` | one page. `limit` is 1000 by default and at most 100000 |
 
@@ -387,9 +397,9 @@ $CV_LAKEHOUSE_ROOT/
     builds/<id>/crop_embeddings/<split>.parquet  one vector per box crop, by box_id
     parts/                           the vectors of a run that stopped
   gold/
-    _gold.json                       the current version, and its datasets
-    versions/<n>/images/<dataset>/<split>.parquet   one row per image
-    versions/<n>/boxes/<dataset>/<split>.parquet    one row per box
+    _gold.json                       the current build, and its datasets
+    builds/<id>/images/<dataset>/<split>.parquet   one row per image
+    builds/<id>/boxes/<dataset>/<split>.parquet    one row per box
     releases/<number>/               the frozen val and test files of one release
 ```
 

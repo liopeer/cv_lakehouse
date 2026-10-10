@@ -45,7 +45,7 @@ def build_eval_release_asset() -> dg.AssetsDefinition:
         return dg.MaterializeResult(
             metadata={
                 "release": manifest.release,
-                "gold_version": manifest.gold_version,
+                "gold_code_version": manifest.gold_code_version,
                 "datasets": [dataset.dataset for dataset in manifest.datasets],
                 "num_files": len(manifest.files),
             }

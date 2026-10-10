@@ -157,8 +157,6 @@ def read_gold_page(
     limit $limit
     """
     with store.duckdb() as connection:
-        # A timestamp then reaches Arrow in UTC, whatever the machine is set to.
-        connection.execute("set TimeZone = 'UTC'")
         rows = connection.execute(query=query, parameters=parameters).to_arrow_table()
         # A full page can have a successor. A short page is the last one. The page of
         # ids decides, because an id can lack a vector.
@@ -219,7 +217,6 @@ def count_gold_images(
     where = f"where {' and '.join(conditions)}" if conditions else ""
     query = f"select count(*) from read_parquet($gold) g {where}"
     with store.duckdb() as connection:
-        connection.execute("set TimeZone = 'UTC'")
         row = connection.execute(query=query, parameters=parameters).fetchone()
     return 0 if row is None else row[0]
 
@@ -229,9 +226,6 @@ def _build_selection_conditions(
 ) -> list[str]:
     """Return the conditions on the gold rows, and add their values to `parameters`."""
     conditions: list[str] = []
-    if selection.changed_since is not None:
-        conditions.append("g.changed_at > cast($changed_since as timestamptz)")
-        parameters["changed_since"] = selection.changed_since
     if selection.commercial_use is not None:
         conditions.append("g.commercial_use = cast($commercial_use as boolean)")
         parameters["commercial_use"] = selection.commercial_use
@@ -268,7 +262,7 @@ def _select_files(
         if row_filter.role and split.role not in row_filter.role:
             continue
         gold_files.append(
-            gold_file(version_dir=directory, dataset=dataset.dataset, split=split.split)
+            gold_file(build_dir=directory, dataset=dataset.dataset, split=split.split)
         )
         if layout.vectors is None:
             continue
@@ -287,11 +281,11 @@ def _iter_splits(
     *, paths: CvLakePaths, manifest: GoldManifest, release: ReleaseManifest | None
 ) -> Iterator[tuple[UPath, GoldDataset, GoldSplit]]:
     """Yield every split with the directory that holds its files."""
-    version_dir = paths.gold_version_dir(manifest.version)
+    gold_dir = paths.gold_build_dir(manifest.build_id)
     for dataset in manifest.datasets:
         for split in dataset.splits:
             if release is None or not split.role.is_eval:
-                yield version_dir, dataset, split
+                yield gold_dir, dataset, split
     if release is not None:
         release_dir = paths.gold_release_dir(release.release)
         for dataset in release.datasets:

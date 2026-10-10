@@ -4,7 +4,6 @@
 #
 """The query parameters that select gold rows."""
 
-from datetime import datetime
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -29,10 +28,8 @@ class ImageSelection(BaseModel):
     # benchmark moves to other rows without a change on its side. Train rows are
     # always those of the current gold.
     release: str | None = Field(default=None, pattern=r"^(draft|[0-9]+)$")
-    # Rows that a gold build changed after this time.
-    changed_since: datetime | None = None
     commercial_use: bool | None = None
-    # One of `num_shards` shards. An image stays in its shard across gold versions.
+    # One of `num_shards` shards. An image stays in its shard across gold builds.
     shard: int | None = Field(default=None, ge=0)
     num_shards: int | None = Field(default=None, ge=1)
 

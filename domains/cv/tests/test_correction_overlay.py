@@ -29,7 +29,7 @@ from lakehouse_cv.defs.corrections import build_corrections_asset
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.correction_overlay import Correction, CorrectionOverlay
-from lakehouse_cv.transforms.gold_build import build_gold_version
+from lakehouse_cv.transforms.gold_build import build_gold
 from tests.export_fakes import EXPORT_URL, FakeExportServer
 from tests.lake_runs import (
     find_silver_files,
@@ -274,7 +274,7 @@ def test_gold_carries_what_a_curator_changed(
     ]
     _build_silver(export_lake=export_lake, rows=rows)
     lake = export_lake[0]
-    build = build_gold_version(
+    build = build_gold(
         store=lake.store,
         paths=lake.paths,
         specs=[SOURCE_BY_NAME[DATASET].spec],
@@ -284,7 +284,7 @@ def test_gold_carries_what_a_curator_changed(
 
     gold = pq.read_table(
         gold_boxes_file(
-            version_dir=lake.paths.gold_version_dir(build.manifest.version),
+            build_dir=lake.paths.gold_build_dir(build.manifest.build_id),
             dataset=DATASET,
             split="train",
         )

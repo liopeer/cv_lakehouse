@@ -135,13 +135,7 @@ def _read_boxes(lake: CvLakeResource) -> list[dict]:
     client = TestClient(create_app(lake.store))
     response = client.get("/v1/boxes", params={"release": "draft", "limit": 10_000})
     assert response.status_code == 200, response.text
-    return sorted(
-        (
-            {key: value for key, value in row.items() if key != "changed_at"}
-            for row in response.json()["rows"]
-        ),
-        key=lambda row: row["box_id"],
-    )
+    return sorted(response.json()["rows"], key=lambda row: row["box_id"])
 
 
 def _upload_tree(source: Path, target: UPath) -> None:

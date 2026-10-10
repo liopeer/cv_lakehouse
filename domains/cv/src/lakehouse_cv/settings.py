@@ -9,6 +9,7 @@ from upath import UPath
 
 from lakehouse_core.lake_paths import LakePaths
 from lakehouse_core.lake_settings import LakeSettings
+from lakehouse_cv.contract.manifests import build_dir
 
 
 class CvSettings(LakeSettings):
@@ -41,8 +42,8 @@ class CvLakePaths(LakePaths):
     def embeddings_dir(self, name: str) -> UPath:
         return self.root / "silver" / f"{name}_embeddings"
 
-    def gold_version_dir(self, version: int) -> UPath:
-        return self.gold_dir() / "versions" / str(version)
+    def gold_build_dir(self, build_id: str) -> UPath:
+        return build_dir(layer_dir=self.gold_dir(), build_id=build_id)
 
     def gold_release_dir(self, release: int) -> UPath:
         return self.gold_dir() / "releases" / f"{release:04d}"

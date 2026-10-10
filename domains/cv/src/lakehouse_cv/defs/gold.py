@@ -14,12 +14,18 @@ import dagster as dg
 from lakehouse_core.fingerprints import sha256_fingerprint
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
-from lakehouse_cv.transforms.gold_build import build_gold_version, read_gold_manifest
+from lakehouse_cv.transforms.gold_build import build_gold, read_gold_manifest
 
 GOLD_KEY = dg.AssetKey(["gold", "current"])
 
 # Bump this when the gold rules change, such as which boxes drop out.
-GOLD_LOGIC_VERSION = "2"
+GOLD_LOGIC_VERSION = "3"
+
+
+class GoldConfig(dg.Config):
+    # The datasets that gold joins. None joins every registered dataset. A lake that
+    # holds only some datasets names them here, as gold does not guess from the disk.
+    datasets: list[str] | None = None
 
 
 def build_gold_asset() -> dg.AssetsDefinition:
@@ -35,28 +41,29 @@ def build_gold_asset() -> dg.AssetsDefinition:
         kinds={"file"},
         code_version=code_version,
         description=(
-            "Every materialized silver dataset as one images and one boxes Parquet "
-            "per dataset and split. A row carries its role, and no box is flagged."
+            "Every silver dataset as one images and one boxes Parquet per dataset and "
+            "split. A row carries its role, and no box is flagged. A dataset with no "
+            "silver fails the run."
         ),
     )
-    def _gold(
-        context: dg.AssetExecutionContext, lake: CvLakeResource
-    ) -> dg.MaterializeResult:
-        build = build_gold_version(
+    def _gold(config: GoldConfig, lake: CvLakeResource) -> dg.MaterializeResult:
+        unknown = set(config.datasets or []) - set(SOURCE_BY_NAME)
+        if unknown:
+            raise dg.Failure(description=f"No such dataset: {sorted(unknown)}")
+        build = build_gold(
             store=lake.store,
             paths=lake.paths,
-            specs=specs,
+            specs=[
+                spec
+                for spec in specs
+                if config.datasets is None or spec.name in config.datasets
+            ],
             code_version=code_version,
             built_at=datetime.now(tz=UTC),
         )
-        if build.skipped_datasets:
-            context.log.warning(
-                f"No silver on disk for {list(build.skipped_datasets)}, so gold "
-                "leaves them out."
-            )
         return dg.MaterializeResult(
             metadata={
-                "version": build.manifest.version,
+                "build_id": build.manifest.build_id,
                 "datasets": [dataset.dataset for dataset in build.manifest.datasets],
                 "dagster/row_count": build.num_images,
                 "num_boxes": build.num_boxes,
@@ -77,13 +84,13 @@ def build_gold_checks() -> list[dg.AssetChecksDefinition]:
         manifest = read_gold_manifest(lake.paths)
         if manifest is None:
             return dg.AssetCheckResult(passed=False, metadata={"problem": "no gold"})
-        version_dir = lake.paths.gold_version_dir(manifest.version)
+        gold_dir = lake.paths.gold_build_dir(manifest.build_id)
         with lake.store.duckdb() as connection:
             problems = connection.execute(
                 query=_KEY_PROBLEM_QUERY,
                 parameters={
-                    "images": str(version_dir / "images" / "*" / "*.parquet"),
-                    "boxes": str(version_dir / "boxes" / "*" / "*.parquet"),
+                    "images": str(gold_dir / "images" / "*" / "*.parquet"),
+                    "boxes": str(gold_dir / "boxes" / "*" / "*.parquet"),
                 },
             ).fetchall()
         return dg.AssetCheckResult(

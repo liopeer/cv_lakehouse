@@ -117,14 +117,14 @@ class GoldDataset(BaseModel):
     splits: list[GoldSplit]
 
 
-class GoldManifest(BaseModel):
-    """The pointer to the gold version that a reader takes.
+class GoldManifest(BuildManifest):
+    """The pointer to the gold build that a reader takes.
 
-    A build writes a whole new version directory and then replaces this file, so a
-    reader never sees a version that is half written.
+    Gold has no versions. It is the latest pure function of silver, and a rebuild from
+    the same silver gives the same rows.
     """
 
-    version: int
+    # When the run happened. A fact about the run, and not about the data.
     built_at: datetime
     code_version: str
     datasets: list[GoldDataset]
@@ -141,13 +141,14 @@ class ReleaseManifest(BaseModel):
     """One frozen copy of the val and test rows of every dataset.
 
     A benchmark names the release it ran on, so two results on one release compare.
-    The manifest says what the release was built from, and pins every file.
+    The manifest says what the release was built from, and pins every file. An eval
+    release is the only frozen copy of gold.
     """
 
     release: int
     created_at: datetime
-    gold_version: int
     gold_code_version: str
-    # The datasets as gold held them, with only their val and test splits.
+    # The datasets as gold held them, with only their val and test splits. Each names
+    # the silver build that it came from.
     datasets: list[GoldDataset]
     files: list[ReleaseFile]

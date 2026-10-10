@@ -28,7 +28,7 @@ from lakehouse_cv.gold_api.arrow_responses import (
 )
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.embeddings import EMBEDDING_DIMENSION
-from lakehouse_cv.transforms.gold_build import build_gold_version
+from lakehouse_cv.transforms.gold_build import build_gold
 from tests.lake_runs import (
     DATASETS,
     find_silver_files,
@@ -53,7 +53,7 @@ def client(
             *(embeddings_defs.build_embeddings_asset(name) for name in DATASETS),
         ],
     )
-    build_gold_version(
+    build_gold(
         store=embedding_lake.store,
         paths=embedding_lake.paths,
         specs=SPECS,
@@ -79,8 +79,20 @@ def test_the_api_answers_503_before_gold_exists(lake: CvLakeResource) -> None:
 
 def test_meta_is_the_gold_manifest(client: TestClient) -> None:
     meta = client.get("/v1/meta").json()
-    assert meta["version"] == 1
+    assert "version" not in meta
     assert {dataset["dataset"] for dataset in meta["datasets"]} == set(DATASETS)
+    assert {dataset["embedding_model"] for dataset in meta["datasets"]} == {
+        "mobileclip_s0"
+    }
+
+
+def test_a_parameter_of_the_past_is_rejected(client: TestClient) -> None:
+    """Gold holds no history, so it cannot tell what changed since a time."""
+    response = client.get(
+        url="/v1/boxes",
+        params={"release": "draft", "changed_since": "2026-01-01T00:00:00Z"},
+    )
+    assert response.status_code == 422
 
 
 def test_classes_are_the_class_registry(lake: CvLakeResource) -> None:
@@ -107,8 +119,6 @@ def test_images_and_boxes_come_unfiltered(client: TestClient) -> None:
         ({"class_name": "license_plate"}, 3),
         ({"class_name": ["face", "other"]}, 7),
         ({"commercial_use": "true"}, 5),
-        ({"changed_since": "2025-12-31T00:00:00Z"}, 10),
-        ({"changed_since": "2026-01-01T00:00:00Z"}, 0),
         ({"dataset": "no_such_dataset"}, 0),
     ],
 )
@@ -213,7 +223,7 @@ def test_a_box_that_moved_after_its_vector_gets_none(
         ),
         path,
     )
-    build_gold_version(
+    build_gold(
         store=embedding_lake.store,
         paths=embedding_lake.paths,
         specs=SPECS,

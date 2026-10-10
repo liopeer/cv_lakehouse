@@ -21,7 +21,7 @@ from lakehouse_cv.defs import silver as silver_defs
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.gold_api.app import create_app
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
-from lakehouse_cv.transforms.gold_build import build_gold_version
+from lakehouse_cv.transforms.gold_build import build_gold
 from lakehouse_cv.transforms.gold_release import (
     IdenticalReleaseError,
     find_changed_release_files,
@@ -51,7 +51,7 @@ def gold_lake(lake: CvLakeResource, bronze_sources: dict[str, Path]) -> CvLakeRe
 
 
 def _build_gold(lake: CvLakeResource) -> None:
-    build_gold_version(
+    build_gold(
         store=lake.store,
         paths=lake.paths,
         specs=SPECS,
@@ -114,7 +114,7 @@ def test_a_gold_rebuild_leaves_a_release_as_it_was(gold_lake: CvLakeResource) ->
     before = release_file.read_bytes()
 
     _move_the_wider_face_val_box(gold_lake)
-    # Gold keeps two versions, so a third build removes the one the release came from.
+    # Gold keeps two builds, so a third build removes the one the release came from.
     _build_gold(gold_lake)
 
     assert release_file.read_bytes() == before
@@ -200,7 +200,7 @@ def test_the_api_serves_the_frozen_rows_of_a_release(gold_lake: CvLakeResource) 
     assert _read_val_x(client=client, release="2") == 99.0
     releases = client.get("/v1/releases").json()
     assert [release["release"] for release in releases] == [1, 2]
-    assert client.get("/v1/releases/2").json()["gold_version"] == 2
+    assert client.get("/v1/releases/2").json()["gold_code_version"] == "test"
     assert client.get("/v1/releases/7").status_code == 404
 
 

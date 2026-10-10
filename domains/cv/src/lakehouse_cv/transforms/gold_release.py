@@ -5,7 +5,7 @@
 """Freeze the val and test rows of gold as a numbered release.
 
 Gold changes with every correction, and a benchmark must not. A release is a copy of
-the val and test files of one gold version, under a number that never moves. The
+the val and test files of one gold build, under a number that never moves. The
 curators keep working on the gold above it, and their fixes reach the next release.
 
 A release holds no vector. The vectors stay in silver, and silver moves on.
@@ -60,7 +60,7 @@ def read_release_manifest(paths: CvLakePaths, release: int) -> ReleaseManifest:
 
 
 def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManifest:
-    """Copy the val and test files of the current gold version into the next release."""
+    """Copy the val and test files of the current gold build into the next release."""
     gold = read_gold_manifest(paths)
     if gold is None:
         raise RuntimeError("Gold is not materialized, so there is nothing to release.")
@@ -72,7 +72,7 @@ def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManif
     staging_dir = release_dir.with_name(f".{release_dir.name}.staging")
     remove_tree(staging_dir)
 
-    version_dir = paths.gold_version_dir(gold.version)
+    gold_dir = paths.gold_build_dir(gold.build_id)
     datasets: list[GoldDataset] = []
     files: list[ReleaseFile] = []
     for dataset in gold.datasets:
@@ -83,8 +83,8 @@ def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManif
         for split in eval_splits:
             for gold_file in (gold_images_file, gold_boxes_file):
                 names = {"dataset": dataset.dataset, "split": split.split}
-                source = gold_file(version_dir=version_dir, **names)
-                target = gold_file(version_dir=staging_dir, **names)
+                source = gold_file(build_dir=gold_dir, **names)
+                target = gold_file(build_dir=staging_dir, **names)
                 copy_file(source=source, target=target)
                 # An object store has no file modes.
                 if is_local(target):
@@ -111,7 +111,6 @@ def write_eval_release(paths: CvLakePaths, created_at: datetime) -> ReleaseManif
     manifest = ReleaseManifest(
         release=release,
         created_at=created_at,
-        gold_version=gold.version,
         gold_code_version=gold.code_version,
         datasets=datasets,
         files=files,

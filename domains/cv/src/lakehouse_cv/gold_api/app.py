@@ -51,7 +51,7 @@ class ServedDataset(GoldDataset):
 class ServedManifest(BaseModel):
     """The gold manifest, with the model of the vectors of each dataset."""
 
-    version: int
+    build_id: str
     built_at: datetime
     code_version: str
     datasets: list[ServedDataset]
