@@ -47,3 +47,4 @@ An ADR records one decision about the architecture, and the reason for it.
 | [0012](0012-heavy-io-on-a-local-disk-takes-a-lease.md) | Heavy I/O on a local disk takes a lease |
 | [0013](0013-silver-vectors-are-sorted-and-kept.md) | Silver vectors are sorted by their id, and kept across runs |
 | [0014](0014-curator-edits-are-bronze-events.md) | Curator edits are bronze events |
+| [0015](0015-every-asset-is-a-pure-function.md) | Every asset is a pure function of its inputs |

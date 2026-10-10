@@ -2,22 +2,24 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Apply the corrections of a curator on top of the normalised source.
+"""Fold the edits of the curators over the normalised source.
 
-Bronze keeps the dataset as published, and the corrections as snapshots beside it.
-Silver is where the two meet: the overlay takes the images that the normaliser yields,
-and changes, removes and adds boxes as the latest snapshot says.
+Bronze keeps the dataset as published, and the edits as event files beside it. Silver
+is where the two meet: the overlay takes the images that the normaliser yields, and
+changes, removes and adds boxes as the latest event of each box says.
 
-A correction wins over the source, field by field. A box that a curator only relabelled
-keeps the exact float coordinates of the source, because LightlyStudio holds whole
-pixels and the snapshot leaves an unmoved box null.
+An event holds the box as LightlyStudio held it, or a tombstone. Folded over the source
+box, it gives a correction, and the correction wins over the source, field by field. A
+box that a curator only relabelled keeps the exact float coordinates of the source,
+because LightlyStudio holds whole pixels.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Self
 
@@ -35,6 +37,23 @@ from lakehouse_cv.transforms.normalization import clip_to_image
 UNKNOWN_LABEL_CLASS = CanonicalClass.OTHER
 
 
+Geometry = tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
+class BoxEvent:
+    """The last edit of one box: the box as LightlyStudio held it, or a tombstone."""
+
+    split: str
+    file_name: str
+    box_id: str
+    is_deleted: bool
+    # None for a tombstone.
+    label_name: str | None
+    # XYWH in whole pixels, or None for a tombstone.
+    geometry: Geometry | None
+
+
 @dataclass(frozen=True)
 class Correction:
     split: str
@@ -43,39 +62,69 @@ class Correction:
     action: str
     label_name: str | None
     # XYWH in pixels, or None when the box did not move.
-    geometry: tuple[float, float, float, float] | None
+    geometry: Geometry | None
+
+
+def round_to_pixels(box: SilverBox) -> Geometry:
+    """Return the box as LightlyStudio stores it: each value rounded half up."""
+    x, y, w, h = (math.floor(value + 0.5) for value in (box.x, box.y, box.w, box.h))
+    return float(x), float(y), float(w), float(h)
+
+
+def fold_event(event: BoxEvent, source: SilverBox | None) -> Correction | None:
+    """Return the correction that an event makes to its source box, or None.
+
+    `source` is the box of the untouched source, or None when the source holds no box
+    of that id, such as a box that a curator drew.
+    """
+    keys = {"split": event.split, "file_name": event.file_name, "box_id": event.box_id}
+    if event.is_deleted:
+        if source is None:
+            return None
+        return Correction(
+            **keys, action=CorrectionAction.DELETE, label_name=None, geometry=None
+        )
+    if source is None:
+        return Correction(
+            **keys,
+            action=CorrectionAction.ADD,
+            label_name=event.label_name,
+            geometry=event.geometry,
+        )
+    label_name = event.label_name if event.label_name != source.class_name else None
+    geometry = event.geometry if event.geometry != round_to_pixels(source) else None
+    if label_name is None and geometry is None:
+        return None
+    return Correction(
+        **keys, action=CorrectionAction.UPDATE, label_name=label_name, geometry=geometry
+    )
 
 
 class CorrectionOverlay:
-    """The corrections of one snapshot, applied to one dataset.
+    """The latest edit of each box, folded over one dataset.
 
     `dropped_box_reasons` and `num_applied` fill while `apply_to_silver_images` runs.
     Read them after the write.
     """
 
-    def __init__(self, corrections: Iterable[Correction]) -> None:
-        self._changes: dict[str, Correction] = {}
-        self._additions: dict[tuple[str, str], list[Correction]] = defaultdict(list)
-        for correction in corrections:
-            if correction.action == CorrectionAction.ADD:
-                key = (correction.split, correction.file_name)
-                self._additions[key].append(correction)
-            else:
-                self._changes[correction.box_id] = correction
+    def __init__(self, events: Iterable[BoxEvent]) -> None:
+        # A later event of a box replaces an earlier one.
+        self._events = {event.box_id: event for event in events}
+        self._events_by_image: dict[tuple[str, str], list[BoxEvent]] = defaultdict(list)
+        for event in self._events.values():
+            self._events_by_image[(event.split, event.file_name)].append(event)
         self.dropped_box_reasons = Counter[str]()
         self.num_applied = 0
 
     @classmethod
-    def from_snapshot(cls, path: UPath | None) -> Self:
-        """Read a snapshot file. No file gives an overlay that changes nothing."""
-        if path is None:
-            return cls([])
+    def from_event_files(cls, paths: Sequence[UPath]) -> Self:
+        """Read the event files in order, and each in the order of its log."""
         return cls(
-            Correction(
+            BoxEvent(
                 split=row["split"],
                 file_name=row["file_name"],
                 box_id=row["box_id"],
-                action=row["action"],
+                is_deleted=row["is_deleted"],
                 label_name=row["label_name"],
                 geometry=(
                     None
@@ -83,7 +132,8 @@ class CorrectionOverlay:
                     else (row["x"], row["y"], row["w"], row["h"])
                 ),
             )
-            for row in read_parquet_table(path).to_pylist()
+            for path in paths
+            for row in read_parquet_table(path).sort_by("log_sequence").to_pylist()
         )
 
     def apply_to_silver_images(
@@ -95,7 +145,13 @@ class CorrectionOverlay:
                 for box in image.boxes
                 if (corrected := self._correct_box(box=box, image=image)) is not None
             ]
-            for addition in self._additions.get((split, image.file_name), []):
+            source_ids = {box.box_id for box in image.boxes}
+            for event in self._events_by_image.get((split, image.file_name), []):
+                if event.box_id in source_ids:
+                    continue
+                addition = fold_event(event=event, source=None)
+                if addition is None or addition.action != CorrectionAction.ADD:
+                    continue
                 added = self._build_added_box(addition=addition, image=image)
                 if added is not None:
                     boxes.append(added)
@@ -108,7 +164,8 @@ class CorrectionOverlay:
             )
 
     def _correct_box(self, box: SilverBox, image: SilverImage) -> SilverBox | None:
-        correction = self._changes.get(box.box_id)
+        event = self._events.get(box.box_id)
+        correction = None if event is None else fold_event(event=event, source=box)
         if correction is None:
             return box
         self.num_applied += 1
@@ -144,7 +201,7 @@ class CorrectionOverlay:
         self, addition: Correction, image: SilverImage
     ) -> SilverBox | None:
         self.num_applied += 1
-        # The export always gives an added box its label and its geometry.
+        # An event that is no tombstone always holds a label and a geometry.
         if addition.label_name is None or addition.geometry is None:
             self.dropped_box_reasons["incomplete_addition"] += 1
             return None

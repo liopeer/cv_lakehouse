@@ -29,9 +29,9 @@ from lakehouse_cv.transforms import embedding_files
 from lakehouse_cv.transforms.embedding_files import (
     CROP_VECTORS,
     IMAGE_VECTORS,
+    SplitVectorFiles,
     VectorCount,
     VectorTable,
-    parts_dir_of,
     split_key_ranges,
     write_vectors,
 )
@@ -86,7 +86,18 @@ def _write_silver(silver_dir: Path, boxes: Sequence[tuple[float, ...]] = ()) -> 
         )
         for index in range(NUM_IMAGES)
     ]
-    write_split(silver_dir=UPath(silver_dir), dataset="d", split="train", images=images)
+    write_split(build_dir=UPath(silver_dir), dataset="d", split="train", images=images)
+
+
+def _files(tmp_path: Path, table: VectorTable = IMAGE_VECTORS) -> SplitVectorFiles:
+    """Rebuild one target in place, as a run that reuses its own last file."""
+    target = table.target_file(build_dir=UPath(tmp_path), split="train")
+    return SplitVectorFiles(
+        rows=table.rows_file(build_dir=UPath(tmp_path), split="train"),
+        target=target,
+        reusable=(target,),
+        parts_dir=UPath(tmp_path) / "parts" / target.parent.name,
+    )
 
 
 def _write(
@@ -96,15 +107,14 @@ def _write(
         store=LakeStore(root=str(tmp_path), storage_options={}),
         embedder=embedder,
         table=table,
-        silver_dir=UPath(tmp_path),
-        split="train",
+        files=_files(tmp_path=tmp_path, table=table),
         locate_image=lambda name: f"/lake/{name}",
         log=lambda message: None,
     )
 
 
 def _read(tmp_path: Path, table: VectorTable = IMAGE_VECTORS):
-    return pq.read_table(table.target_file(silver_dir=UPath(tmp_path), split="train"))
+    return pq.read_table(_files(tmp_path=tmp_path, table=table).target)
 
 
 def test_the_vectors_are_sorted_by_the_id_and_name_the_model(tmp_path: Path) -> None:
@@ -131,9 +141,7 @@ def test_the_vectors_are_sorted_by_the_id_and_name_the_model(tmp_path: Path) -> 
         EMBEDDING_MODEL_METADATA_KEY: b"mobileclip_s0",
         EMBEDDING_VERSION_METADATA_KEY: b"1",
     }
-    assert not parts_dir_of(
-        IMAGE_VECTORS.target_file(silver_dir=UPath(tmp_path), split="train")
-    ).exists()
+    assert not _files(tmp_path).parts_dir.exists()
 
 
 def test_a_crop_rounds_half_to_even_and_names_at_least_one_pixel(
@@ -172,20 +180,19 @@ def test_a_stopped_run_keeps_every_closed_part(
     with pytest.raises(expected_exception=ConnectionError):
         _write(tmp_path, _StoppingEmbedder(requests_before_stop=3))
 
-    target = IMAGE_VECTORS.target_file(silver_dir=UPath(tmp_path), split="train")
-    assert not target.exists()
-    assert len(list(parts_dir_of(target).iterdir())) == 3
+    files = _files(tmp_path)
+    assert not files.target.exists()
+    assert len(list(files.parts_dir.iterdir())) == 3
     embedder = FakeEmbedder()
     count = _write(tmp_path, embedder)
     assert count == VectorCount(written=NUM_IMAGES, embedded=NUM_IMAGES - 12)
     assert len(set(embedder.paths)) == NUM_IMAGES - 12
-    assert not parts_dir_of(target).exists()
+    assert not files.parts_dir.exists()
 
 
 def test_a_part_that_a_stopped_run_left_open_is_removed(tmp_path: Path) -> None:
     _write_silver(tmp_path)
-    target = IMAGE_VECTORS.target_file(silver_dir=UPath(tmp_path), split="train")
-    parts_dir = parts_dir_of(target)
+    parts_dir = _files(tmp_path).parts_dir
     parts_dir.mkdir(parents=True)
     (parts_dir / "part-0.writing").write_bytes(b"half a file")
     (parts_dir / "part-1.parquet").write_bytes(b"not parquet")

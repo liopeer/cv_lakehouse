@@ -4,25 +4,23 @@
 #
 """Silver assets: one dataset, normalised onto the class registry, written as Parquet.
 
-When `CV_LAKEHOUSE_TRITON_URL` names a server, the same run also embeds every image
-and every box crop with MobileCLIP. A run embeds only an image or a crop that no earlier
-run embedded with the same model, also one that stopped halfway.
+A run writes a new build, checks every box, and only then replaces the manifest. A run
+that fails leaves the last good silver as it was.
 """
 
 # Dagster resolves the resource annotations at runtime, so this module must not
 # postpone its annotations.
 
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping, Sequence
 
 import dagster as dg
-import duckdb
 from upath import UPath
 
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST
 from lakehouse_core.fingerprints import sha256_fingerprint
-from lakehouse_core.lake_store import LakeStore, build_reader_locator
-from lakehouse_core.manifest_files import read_manifest, write_manifest
+from lakehouse_core.lake_store import LakeStore
+from lakehouse_core.manifest_files import read_manifest
 from lakehouse_cv.contract.class_registry import (
     CanonicalClass,
     class_registry_sha256_fingerprint,
@@ -31,24 +29,26 @@ from lakehouse_cv.contract.manifests import (
     SILVER_MANIFEST,
     CvBronzeManifest,
     SilverManifest,
+    build_dir,
 )
 from lakehouse_cv.contract.silver_tables import boxes_file, images_file
 from lakehouse_cv.defs.corrections import (
     build_corrections_key,
+    list_event_paths,
     read_corrections_manifest,
 )
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.sources.base import read_raw_images
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.correction_overlay import CorrectionOverlay
-from lakehouse_cv.transforms.embedding_files import (
-    CROP_VECTORS,
-    EMBEDDING_VERSION,
-    IMAGE_VECTORS,
-    clear_vectors,
-    write_vectors,
+from lakehouse_cv.transforms.layer_builds import (
+    derive_build_id,
+    discard_build,
+    publish_build,
+    read_silver_manifest,
+    reuse_whole_build,
+    silver_build_dir,
 )
-from lakehouse_cv.transforms.embeddings import EMBEDDING_MODEL, Embedder, TritonEmbedder
 from lakehouse_cv.transforms.normalization import RawImageNormalizer
 from lakehouse_cv.transforms.progress_log import ProgressLog, iter_with_progress
 from lakehouse_cv.transforms.silver_writer import write_split
@@ -56,8 +56,6 @@ from lakehouse_cv.transforms.silver_writer import write_split
 # Clipping writes a coordinate back as a float, so a box that ends exactly on the edge
 # can land a hair either side of it. Only a real overflow should fail the check.
 EDGE_TOLERANCE_PIXELS = 1e-6
-# Long enough for a request that waits in the queue of Triton.
-PRESIGNED_URL_SECONDS = 3600
 
 
 # Bump this when the normalisation rules change, such as clipping or the drop policy.
@@ -67,15 +65,11 @@ SILVER_LOGIC_VERSION = "6"
 def build_silver_asset(name: str) -> dg.AssetsDefinition:
     source = SOURCE_BY_NAME[name]
     spec = source.spec
-    # The model name belongs in the version and the server URL does not: moving the
-    # server leaves the weights, and therefore the vectors, exactly as they were.
     code_version = sha256_fingerprint(
         [
             SILVER_LOGIC_VERSION,
             class_registry_sha256_fingerprint(),
             spec.category_map_sha256_fingerprint,
-            EMBEDDING_MODEL,
-            EMBEDDING_VERSION,
         ]
     )
 
@@ -89,40 +83,53 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             f"{name} on the class registry, with the corrections of the curators "
             "applied, as one images and one boxes Parquet per split. Per box "
             "`attr_*` columns carry what the source published; "
-            "LightlyStudio cannot display them yet. A configured Triton server adds "
-            f"one {EMBEDDING_MODEL} embedding per image and per box crop."
+            "LightlyStudio cannot display them yet."
         ),
         metadata={"license": spec.license, "commercial_use": spec.commercial_use},
     )
     def _silver(
         context: dg.AssetExecutionContext, lake: CvLakeResource
     ) -> dg.MaterializeResult:
-        bronze = read_manifest(
-            path=lake.paths.bronze_dir(name) / BRONZE_MANIFEST, model=CvBronzeManifest
-        )
+        bronze_path = lake.paths.bronze_dir(name) / BRONZE_MANIFEST
+        bronze = read_manifest(path=bronze_path, model=CvBronzeManifest)
         bronze_dir = lake.store.resolve(bronze.path)
         silver_dir = lake.paths.silver_dir(name)
         corrections = read_corrections_manifest(paths=lake.paths, name=name)
-        snapshot = corrections.snapshots[-1] if corrections.snapshots else None
-        overlay = CorrectionOverlay.from_snapshot(
-            None
-            if snapshot is None
-            else lake.paths.corrections_dir(name) / snapshot.file.path
+        # Bronze pins every file it names, and an event file never changes, so the
+        # manifests name the inputs.
+        build_id = derive_build_id(
+            [
+                code_version,
+                bronze_path.read_text(),
+                *(
+                    f"{event_file.chain_id}/{event_file.event_file_id}"
+                    for event_file in corrections.event_files
+                ),
+            ]
         )
-
-        embedder = (
-            TritonEmbedder(lake.triton_url) if lake.triton_url is not None else None
-        )
-        if embedder is None:
-            context.log.warning(
-                "CV_LAKEHOUSE_TRITON_URL is unset, so this run writes no embedding."
+        if reuse_whole_build(
+            manifest_path=silver_dir / SILVER_MANIFEST,
+            build_id=build_id,
+            model=SilverManifest,
+        ):
+            context.log.info(f"Build {build_id} is whole, so this run writes nothing.")
+            return dg.MaterializeResult(
+                data_version=dg.DataVersion(build_id),
+                metadata={"build_id": build_id, "is_reused": True},
             )
+        staged_dir = build_dir(layer_dir=silver_dir, build_id=build_id)
+        overlay = CorrectionOverlay.from_event_files(
+            list_event_paths(
+                paths=lake.paths,
+                manifest=corrections,
+                last_event=corrections.last_event,
+            )
+        )
 
         # Counted by the writer as it streams, not read back off the Parquet. These
         # go to the run log and the Dagster metadata, and no further: a materialisation
         # reports what it did, and the manifest describes what the layer is.
-        num_images = num_boxes = num_embeddings = num_crop_embeddings = 0
-        num_reused_embeddings = 0
+        num_images = num_boxes = 0
         dropped_box_reasons = Counter[str]()
         for split in bronze.splits:
             normalizer = RawImageNormalizer(
@@ -131,13 +138,11 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 category_map=spec.category_map,
                 default_class=spec.default_class,
             )
-            # The lease also covers the embeddings, because Triton reads the images
-            # by path.
             with lake.disk_lease.hold(
                 target=bronze_dir, reason=f"Silver {name} {split}", log=context.log
             ):
                 written_images, written_boxes = write_split(
-                    silver_dir=silver_dir,
+                    build_dir=staged_dir,
                     dataset=name,
                     split=split,
                     images=iter_with_progress(
@@ -154,125 +159,96 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                         ),
                     ),
                 )
-                if embedder is None:
-                    clear_vectors(silver_dir=silver_dir, split=split)
-                    written_vectors, written_crops, reused = 0, 0, 0
-                else:
-                    written_vectors, written_crops, reused = _embed_split(
-                        store=lake.store,
-                        embedder=embedder,
-                        silver_dir=silver_dir,
-                        split=split,
-                        image_root=bronze.image_roots[split],
-                        log=context.log.info,
-                    )
-            num_reused_embeddings += reused
             num_images += written_images
             num_boxes += written_boxes
-            num_embeddings += written_vectors
-            num_crop_embeddings += written_crops
             dropped_box_reasons.update(normalizer.dropped_box_reasons)
             context.log.info(
                 f"{split}: {written_images} images, {written_boxes} boxes, "
-                f"{sum(normalizer.dropped_box_reasons.values())} dropped, "
-                f"{written_vectors + written_crops} embeddings, {reused} of them reused"
+                f"{sum(normalizer.dropped_box_reasons.values())} dropped"
             )
         # The overlay counts across the splits, so its tally joins once.
         dropped_box_reasons.update(overlay.dropped_box_reasons)
 
-        write_manifest(
-            path=silver_dir / SILVER_MANIFEST,
+        problems = find_box_problems(
+            store=lake.store, build_dir=staged_dir, splits=bronze.splits
+        )
+        if problems:
+            discard_build(layer_dir=silver_dir, build_id=build_id)
+            raise dg.Failure(
+                description=f"{len(problems)} boxes are not valid, so silver keeps "
+                "its last build.",
+                metadata={"examples": problems[:10]},
+            )
+        publish_build(
+            manifest_path=silver_dir / SILVER_MANIFEST,
             manifest=SilverManifest(
                 dataset=name,
                 code_version=code_version,
+                build_id=build_id,
                 license=spec.license,
                 commercial_use=spec.commercial_use,
                 image_roots=bronze.image_roots,
                 splits=list(bronze.splits),
-                embedding_model=EMBEDDING_MODEL if embedder is not None else None,
-                correction_snapshot_id=(
-                    None if snapshot is None else snapshot.snapshot_id
-                ),
+                last_event=corrections.last_event,
             ),
         )
         return dg.MaterializeResult(
+            data_version=dg.DataVersion(build_id),
             metadata=_build_run_metadata(
+                build_id=build_id,
                 license_name=spec.license,
                 num_images=num_images,
                 num_boxes=num_boxes,
-                num_embeddings=num_embeddings,
-                num_crop_embeddings=num_crop_embeddings,
-                num_reused_embeddings=num_reused_embeddings,
                 dropped_box_reasons=dropped_box_reasons,
-                embedded=embedder is not None,
-                correction_snapshot_id=(
-                    "none" if snapshot is None else snapshot.snapshot_id
-                ),
+                num_event_files=len(corrections.event_files),
                 num_corrections_applied=overlay.num_applied,
-            )
+            ),
         )
 
     return _silver
 
 
-def _embed_split(
-    *,
-    store: LakeStore,
-    embedder: Embedder,
-    silver_dir: UPath,
-    split: str,
-    image_root: str,
-    log: Callable[[str], None],
-) -> tuple[int, int, int]:
-    """Embed the images and the box crops of one split.
-
-    Return the image count, the crop count, and how many vectors of the two an earlier
-    run made.
-    """
-    # A lake on an object store reaches Triton as presigned URLs, made batch by batch,
-    # just before each request.
-    locate_image = build_reader_locator(
-        store.resolve(image_root), expires_seconds=PRESIGNED_URL_SECONDS
-    )
-    images, crops = (
-        write_vectors(
-            store=store,
-            embedder=embedder,
-            table=table,
-            silver_dir=silver_dir,
-            split=split,
-            locate_image=locate_image,
-            log=log,
+def find_box_problems(
+    *, store: LakeStore, build_dir: UPath, splits: Sequence[str]
+) -> list[str]:
+    """Check every box with one query per split, rather than a sample."""
+    problems: list[str] = []
+    for split in splits:
+        with store.duckdb() as connection:
+            rows = connection.execute(
+                query=_BOX_PROBLEM_QUERY,
+                parameters={
+                    "boxes": str(boxes_file(build_dir=build_dir, split=split)),
+                    "images": str(images_file(build_dir=build_dir, split=split)),
+                    "ids": [member.value for member in CanonicalClass],
+                    "tolerance": EDGE_TOLERANCE_PIXELS,
+                },
+            ).fetchall()
+        problems.extend(
+            f"{split}:{file_name}: {problem}" for file_name, problem in rows
         )
-        for table in (IMAGE_VECTORS, CROP_VECTORS)
-    )
-    return images.written, crops.written, images.reused + crops.reused
+    return problems
 
 
 def _build_run_metadata(
     *,
+    build_id: str,
     license_name: str,
     num_images: int,
     num_boxes: int,
-    num_embeddings: int,
-    num_crop_embeddings: int,
-    num_reused_embeddings: int,
     dropped_box_reasons: Mapping[str, int],
-    embedded: bool,
-    correction_snapshot_id: str,
+    num_event_files: int,
     num_corrections_applied: int,
 ) -> dict:
     """What this run did, for the Dagster UI. Not persisted beside the data."""
     return {
+        "build_id": build_id,
+        "is_reused": False,
         "dagster/row_count": num_images,
         "num_boxes": num_boxes,
-        "num_embeddings": num_embeddings,
-        "num_crop_embeddings": num_crop_embeddings,
-        "num_reused_embeddings": num_reused_embeddings,
-        "embedding_model": EMBEDDING_MODEL if embedded else "none",
         "license": license_name,
         "dropped_reasons": dg.MetadataValue.json(dict(dropped_box_reasons)),
-        "correction_snapshot": correction_snapshot_id,
+        "num_event_files": num_event_files,
         "num_corrections_applied": num_corrections_applied,
     }
 
@@ -285,40 +261,20 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
         name="boxes_are_valid",
         description=(
             "Every box has a unique id, is inside its image, has an area, and a "
-            "known class."
+            "known class. The asset runs the same check before it publishes a build."
         ),
         blocking=True,
     )
     def _boxes_are_valid(lake: CvLakeResource) -> dg.AssetCheckResult:
-        """Check every box with one query per split, rather than a sample."""
-        silver_dir = lake.paths.silver_dir(name)
-        problems: list[str] = []
-        checked = 0
-        for split in _read_manifest_splits(lake=lake, name=name):
-            with lake.store.duckdb() as connection:
-                rows = connection.execute(
-                    query=_BOX_PROBLEM_QUERY,
-                    parameters={
-                        "boxes": str(boxes_file(silver_dir=silver_dir, split=split)),
-                        "images": str(images_file(silver_dir=silver_dir, split=split)),
-                        "ids": [member.value for member in CanonicalClass],
-                        "tolerance": EDGE_TOLERANCE_PIXELS,
-                    },
-                ).fetchall()
-                checked += _count_boxes(
-                    connection=connection,
-                    path=boxes_file(silver_dir=silver_dir, split=split),
-                )
-            problems.extend(
-                f"{split}:{file_name}: {problem}" for file_name, problem in rows
-            )
+        manifest = read_silver_manifest(paths=lake.paths, name=name)
+        problems = find_box_problems(
+            store=lake.store,
+            build_dir=silver_build_dir(paths=lake.paths, manifest=manifest),
+            splits=manifest.splits,
+        )
         return dg.AssetCheckResult(
             passed=not problems,
-            metadata={
-                "num_boxes": checked,
-                "num_problems": len(problems),
-                "examples": problems[:10],
-            },
+            metadata={"num_problems": len(problems), "examples": problems[:10]},
         )
 
     @dg.asset_check(
@@ -332,10 +288,8 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
         Reading a single Parquet column is cheap enough to check every image, so this no
         longer samples.
         """
-        manifest = read_manifest(
-            path=lake.paths.silver_dir(name) / SILVER_MANIFEST, model=SilverManifest
-        )
-        silver_dir = lake.paths.silver_dir(name)
+        manifest = read_silver_manifest(paths=lake.paths, name=name)
+        current_dir = silver_build_dir(paths=lake.paths, manifest=manifest)
         missing: list[str] = []
         checked = 0
         for split in manifest.splits:
@@ -344,7 +298,7 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
                 names = connection.execute(
                     query=_IMAGE_NAME_QUERY,
                     parameters={
-                        "path": str(images_file(silver_dir=silver_dir, split=split))
+                        "path": str(images_file(build_dir=current_dir, split=split))
                     },
                 ).fetchall()
             for (file_name,) in names:
@@ -364,44 +318,40 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
         asset=key,
         name="corrections_are_applied",
         description=(
-            "Every correction found its box, and every label of a curator is a class "
-            "of the registry."
+            "Every edited box that is no tombstone is in silver, and every label of a "
+            "curator is a class of the registry."
         ),
     )
     def _corrections_are_applied(lake: CvLakeResource) -> dg.AssetCheckResult:
         """Report what the overlay could not apply as the curator meant it.
 
         Neither case fails the run. A box with an unknown label is in silver as
-        `other`, and a correction with no box changes nothing.
+        `other`, and an event with no box changes nothing.
         """
-        silver_dir = lake.paths.silver_dir(name)
-        manifest = read_manifest(
-            path=silver_dir / SILVER_MANIFEST, model=SilverManifest
+        manifest = read_silver_manifest(paths=lake.paths, name=name)
+        folded = list_event_paths(
+            paths=lake.paths,
+            manifest=read_corrections_manifest(paths=lake.paths, name=name),
+            last_event=manifest.last_event,
         )
-        snapshot_path = next(
-            (
-                lake.paths.corrections_dir(name) / snapshot.file.path
-                for snapshot in read_corrections_manifest(
-                    paths=lake.paths, name=name
-                ).snapshots
-                if snapshot.snapshot_id == manifest.correction_snapshot_id
-            ),
-            None,
-        )
-        if snapshot_path is None:
-            return dg.AssetCheckResult(passed=True, metadata={"snapshot": "none"})
+        if not folded:
+            return dg.AssetCheckResult(passed=True, metadata={"num_event_files": 0})
         parameters = {
-            "snapshot": str(snapshot_path),
-            "boxes": str(silver_dir / "boxes" / "*.parquet"),
+            "events": [str(path) for path in folded],
+            "boxes": str(
+                silver_build_dir(paths=lake.paths, manifest=manifest)
+                / "boxes"
+                / "*.parquet"
+            ),
         }
         with lake.store.duckdb() as connection:
             orphans = connection.execute(
-                query=_ORPHAN_CORRECTION_QUERY, parameters=parameters
+                query=_ORPHAN_EVENT_QUERY, parameters=parameters
             ).fetchall()
             unknown_labels = connection.execute(
                 query=_UNKNOWN_LABEL_QUERY,
                 parameters={
-                    "snapshot": str(snapshot_path),
+                    "events": parameters["events"],
                     "names": sorted(CanonicalClass.all_class_names()),
                 },
             ).fetchall()
@@ -409,9 +359,9 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
             passed=not orphans and not unknown_labels,
             severity=dg.AssetCheckSeverity.WARN,
             metadata={
-                "snapshot": manifest.correction_snapshot_id,
+                "num_event_files": len(folded),
                 "num_orphans": len(orphans),
-                "orphans": [f"{action} {box_id}" for box_id, action in orphans[:10]],
+                "orphans": [box_id for (box_id,) in orphans[:10]],
                 "unknown_labels": [label for (label,) in unknown_labels],
             },
         )
@@ -458,38 +408,33 @@ select file_name, problem from judged where problem is not null
 """
 
 
-# A changed or an added box that silver does not hold. Its source box is gone, its
-# image is not in the split, or the corrected box has no area inside the image. A
-# deleted box leaves no trace either way, so this cannot report it.
-_ORPHAN_CORRECTION_QUERY = """
-select c.box_id, c.action
-from read_parquet($snapshot) c
-left join read_parquet($boxes) b on b.box_id = c.box_id
-where c.action <> 'delete' and b.box_id is null
-order by c.box_id
+# The latest event of each box, in the order of the files and then of the log.
+_LATEST_EVENTS = """
+select * from read_parquet($events, filename = true)
+qualify row_number() over (
+    partition by box_id order by list_position($events, filename) desc,
+        log_sequence desc
+) = 1
+"""
+
+# An edited box that is no tombstone and that silver does not hold. Its image is not in
+# the split, or the box has no area inside the image. A tombstone leaves no trace either
+# way, so this cannot report it.
+_ORPHAN_EVENT_QUERY = f"""
+with latest as ({_LATEST_EVENTS})
+select e.box_id
+from latest e
+left join read_parquet($boxes) b on b.box_id = e.box_id
+where not e.is_deleted and b.box_id is null
+order by e.box_id
 """
 
 _UNKNOWN_LABEL_QUERY = """
 select distinct label_name
-from read_parquet($snapshot)
+from read_parquet($events)
 where label_name is not null and not list_contains($names, lower(label_name))
 order by label_name
 """
-
-
-def _count_boxes(connection: duckdb.DuckDBPyConnection, path: UPath) -> int:
-    row = connection.execute(
-        query="select count(*) from read_parquet($path)",
-        parameters={"path": str(path)},
-    ).fetchone()
-    return 0 if row is None else int(row[0])
-
-
-def _read_manifest_splits(lake: CvLakeResource, name: str):
-    manifest = read_manifest(
-        path=lake.paths.silver_dir(name) / SILVER_MANIFEST, model=SilverManifest
-    )
-    return manifest.splits
 
 
 _names = list(SOURCE_BY_NAME)

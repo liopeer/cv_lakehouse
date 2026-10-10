@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Apply correction snapshots in silver, on the fixture lake."""
+"""Fold the event files of the curators in silver, on the fixture lake."""
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,10 +28,20 @@ from lakehouse_cv.defs import silver as silver_defs
 from lakehouse_cv.defs.corrections import build_corrections_asset
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
-from lakehouse_cv.transforms.correction_overlay import Correction, CorrectionOverlay
-from lakehouse_cv.transforms.gold_build import build_gold_version
+from lakehouse_cv.transforms.correction_overlay import (
+    BoxEvent,
+    Correction,
+    CorrectionOverlay,
+    fold_event,
+)
+from lakehouse_cv.transforms.gold_build import build_gold
 from tests.export_fakes import EXPORT_URL, FakeExportServer
-from tests.lake_runs import materialize_assets, materialize_bronze_links
+from tests.lake_runs import (
+    find_silver_files,
+    materialize_assets,
+    materialize_bronze_links,
+    read_silver_build_ids,
+)
 
 DATASET = "wider_face"
 PARADE = "0--Parade/a.jpg"
@@ -42,16 +52,40 @@ FACE = derive_box_id(
     dataset=DATASET, split="train", file_name=PARADE, source_box_index=0
 )
 DRAWN = "aaaaaaaa-0000-0000-0000-000000000001"
+# The face as LightlyStudio holds it, in whole pixels.
+FACE_PIXELS = (10.0, 20.0, 30.0, 40.0)
 
 
-def _correction(box_id: str, action: str, file_name: str = PARADE, **fields) -> dict:
+def _event(
+    box_id: str,
+    *,
+    file_name: str = PARADE,
+    label_name: str = "face",
+    geometry: tuple[float, float, float, float] = FACE_PIXELS,
+) -> dict:
+    """The box as a curator left it in LightlyStudio."""
+    x, y, w, h = geometry
     return {
         "dataset": DATASET,
         "split": "train",
         "file_name": file_name,
         "box_id": box_id,
-        "action": action,
-        **fields,
+        "is_deleted": False,
+        "label_name": label_name,
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
+    }
+
+
+def _tombstone(box_id: str) -> dict:
+    return {
+        "dataset": DATASET,
+        "split": "train",
+        "file_name": PARADE,
+        "box_id": box_id,
+        "is_deleted": True,
     }
 
 
@@ -81,7 +115,7 @@ def export_lake(
 def _build_silver(
     export_lake: tuple[CvLakeResource, FakeExportServer], rows: list[dict] | None
 ) -> dg.ExecuteInProcessResult:
-    """Publish the rows as a snapshot, fetch it, and build silver with its checks."""
+    """Publish the rows as an event file, fetch it, and build silver with its checks."""
     lake, server = export_lake
     if rows is not None:
         server.publish(dataset=DATASET, rows=rows)
@@ -97,7 +131,7 @@ def _build_silver(
 
 def _read_train_boxes(lake: CvLakeResource) -> dict[str, dict]:
     table = pq.read_table(
-        boxes_file(silver_dir=lake.paths.silver_dir(DATASET), split="train")
+        boxes_file(build_dir=find_silver_files(lake=lake, name=DATASET), split="train")
     )
     assert table.schema == BOX_SCHEMA
     return {row["box_id"]: row for row in table.to_pylist()}
@@ -112,7 +146,7 @@ def _read_check(result: dg.ExecuteInProcessResult) -> dg.AssetCheckEvaluation:
     return evaluation
 
 
-def test_silver_with_no_snapshot_is_the_bare_source(
+def test_silver_with_no_event_is_the_bare_source(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
     result = _build_silver(export_lake=export_lake, rows=None)
@@ -126,13 +160,13 @@ def test_silver_with_no_snapshot_is_the_bare_source(
         path=export_lake[0].paths.silver_dir(DATASET) / SILVER_MANIFEST,
         model=SilverManifest,
     )
-    assert manifest.correction_snapshot_id is None
+    assert manifest.last_event is None
 
 
 def test_a_relabelled_box_keeps_its_exact_coordinates(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
-    rows = [_correction(box_id=FACE, action=CorrectionAction.UPDATE, label_name="head")]
+    rows = [_event(FACE, label_name="head")]
     result = _build_silver(export_lake=export_lake, rows=rows)
 
     face = _read_train_boxes(export_lake[0])[FACE]
@@ -146,11 +180,7 @@ def test_a_relabelled_box_keeps_its_exact_coordinates(
 def test_a_moved_box_takes_the_pixels_of_the_curator(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
-    rows = [
-        _correction(
-            box_id=FACE, action=CorrectionAction.UPDATE, x=12.0, y=22.0, w=33.0, h=44.0
-        )
-    ]
+    rows = [_event(FACE, geometry=(12.0, 22.0, 33.0, 44.0))]
     _build_silver(export_lake=export_lake, rows=rows)
 
     face = _read_train_boxes(export_lake[0])[FACE]
@@ -164,7 +194,7 @@ def test_a_moved_box_takes_the_pixels_of_the_curator(
 def test_a_deleted_box_leaves_silver_and_is_counted(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
-    rows = [_correction(box_id=FACE, action=CorrectionAction.DELETE)]
+    rows = [_tombstone(FACE)]
     result = _build_silver(export_lake=export_lake, rows=rows)
 
     boxes = _read_train_boxes(export_lake[0])
@@ -182,15 +212,11 @@ def test_a_drawn_box_joins_its_image_under_the_id_of_lightly_studio(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
     rows = [
-        _correction(
-            box_id=DRAWN,
-            action=CorrectionAction.ADD,
+        _event(
+            DRAWN,
             file_name=HANDSHAKING,
             label_name="license_plate",
-            x=190.0,
-            y=5.0,
-            w=50.0,
-            h=10.0,
+            geometry=(190.0, 5.0, 50.0, 10.0),
         )
     ]
     result = _build_silver(export_lake=export_lake, rows=rows)
@@ -207,7 +233,7 @@ def test_a_drawn_box_joins_its_image_under_the_id_of_lightly_studio(
 def test_an_unknown_label_lands_as_other_and_the_check_names_it(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
-    rows = [_correction(box_id=FACE, action=CorrectionAction.UPDATE, label_name="Dog")]
+    rows = [_event(FACE, label_name="Dog")]
     result = _build_silver(export_lake=export_lake, rows=rows)
 
     face = _read_train_boxes(export_lake[0])[FACE]
@@ -217,70 +243,90 @@ def test_an_unknown_label_lands_as_other_and_the_check_names_it(
     assert check.metadata["unknown_labels"].value == ["Dog"]
 
 
-def test_a_correction_with_no_box_changes_nothing_and_the_check_names_it(
+def test_an_event_with_no_image_changes_nothing_and_the_check_names_it(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
     orphan = "bbbbbbbb-0000-0000-0000-000000000002"
-    rows = [
-        _correction(box_id=orphan, action=CorrectionAction.UPDATE, label_name="head")
-    ]
+    rows = [_event(orphan, file_name="9--Nowhere/z.jpg")]
     result = _build_silver(export_lake=export_lake, rows=rows)
 
     assert len(_read_train_boxes(export_lake[0])) == 2
     check = _read_check(result)
     assert not check.passed
-    assert check.metadata["orphans"].value == [f"update {orphan}"]
+    assert check.metadata["orphans"].value == [orphan]
 
 
-def test_only_the_latest_snapshot_applies(
+def test_the_latest_event_of_a_box_wins(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
-    """A snapshot holds every live correction, so a reverted one is just absent."""
-    first = [_correction(box_id=FACE, action=CorrectionAction.DELETE)]
-    _build_silver(export_lake=export_lake, rows=first)
-    second = [
-        _correction(box_id=FACE, action=CorrectionAction.UPDATE, label_name="head")
-    ]
-    _build_silver(export_lake=export_lake, rows=second)
+    _build_silver(export_lake=export_lake, rows=[_tombstone(FACE)])
+    _build_silver(export_lake=export_lake, rows=[_event(FACE, label_name="head")])
 
     assert _read_train_boxes(export_lake[0])[FACE]["class_name"] == "head"
     manifest = read_manifest(
         path=export_lake[0].paths.silver_dir(DATASET) / SILVER_MANIFEST,
         model=SilverManifest,
     )
-    assert manifest.correction_snapshot_id is not None
-    assert manifest.correction_snapshot_id.startswith("000002-")
+    assert manifest.last_event is not None
+    assert manifest.last_event.log_sequence == 2
+
+
+def test_an_event_that_equals_the_source_changes_nothing(
+    export_lake: tuple[CvLakeResource, FakeExportServer],
+) -> None:
+    """A curator who undoes an edit leaves the box as the source has it."""
+    _build_silver(export_lake=export_lake, rows=[_event(FACE, label_name="head")])
+    result = _build_silver(export_lake=export_lake, rows=[_event(FACE)])
+
+    face = _read_train_boxes(export_lake[0])[FACE]
+    assert (face["class_name"], face["is_class_corrected"]) == ("face", False)
+    materialization = result.asset_materializations_for_node("silver__wider_face")[0]
+    assert materialization.metadata["num_corrections_applied"].value == 0
+
+
+def test_a_new_database_keeps_the_edits_of_the_old_one(
+    export_lake: tuple[CvLakeResource, FakeExportServer],
+) -> None:
+    lake, server = export_lake
+    _build_silver(export_lake=export_lake, rows=[_tombstone(FACE)])
+    server.start_new_chain()
+    drawn = _event(DRAWN, file_name=HANDSHAKING, geometry=(1.0, 2.0, 3.0, 4.0))
+
+    _build_silver(export_lake=export_lake, rows=[drawn])
+
+    boxes = _read_train_boxes(lake)
+    assert FACE not in boxes
+    assert DRAWN in boxes
+    manifest = read_manifest(
+        path=lake.paths.silver_dir(DATASET) / SILVER_MANIFEST, model=SilverManifest
+    )
+    assert manifest.last_event is not None
+    assert manifest.last_event.chain_id == server.chain_id
 
 
 def test_gold_carries_what_a_curator_changed(
     export_lake: tuple[CvLakeResource, FakeExportServer],
 ) -> None:
     rows = [
-        _correction(box_id=FACE, action=CorrectionAction.UPDATE, label_name="head"),
-        _correction(
-            box_id=DRAWN,
-            action=CorrectionAction.ADD,
-            file_name=HANDSHAKING,
-            label_name="face",
-            x=1.0,
-            y=1.0,
-            w=5.0,
-            h=5.0,
-        ),
+        _event(FACE, label_name="head"),
+        _event(DRAWN, file_name=HANDSHAKING, geometry=(1.0, 1.0, 5.0, 5.0)),
     ]
     _build_silver(export_lake=export_lake, rows=rows)
     lake = export_lake[0]
-    build = build_gold_version(
+    build = build_gold(
         store=lake.store,
         paths=lake.paths,
         specs=[SOURCE_BY_NAME[DATASET].spec],
+        silver_build_ids=read_silver_build_ids(
+            lake=lake, names=[spec.name for spec in [SOURCE_BY_NAME[DATASET].spec]]
+        ),
         code_version="test",
         built_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
     gold = pq.read_table(
         gold_boxes_file(
-            version_dir=lake.paths.gold_version_dir(build.manifest.version),
+            build_dir=lake.paths.gold_build_dir(build.manifest.build_id),
             dataset=DATASET,
             split="train",
         )
@@ -296,12 +342,12 @@ def test_gold_carries_what_a_curator_changed(
 def test_the_overlay_drops_a_box_that_a_move_leaves_no_area() -> None:
     overlay = CorrectionOverlay(
         [
-            Correction(
+            BoxEvent(
                 split="train",
                 file_name="a.jpg",
                 box_id="box",
-                action=CorrectionAction.UPDATE,
-                label_name=None,
+                is_deleted=False,
+                label_name="face",
                 geometry=(500.0, 500.0, 10.0, 10.0),
             )
         ]
@@ -328,3 +374,99 @@ def test_the_overlay_drops_a_box_that_a_move_leaves_no_area() -> None:
 
     assert corrected.boxes == ()
     assert overlay.dropped_box_reasons == {"degenerate_box": 1}
+
+
+# A source box off the pixel grid. LightlyStudio holds it as 10 21 30 40.
+_SOURCE = SilverBox(
+    box_id="box",
+    box_index=0,
+    class_id=0,
+    class_name="face",
+    source_class="face",
+    x=10.4,
+    y=20.5,
+    w=29.6,
+    h=40.0,
+)
+_KEYS = {"split": "train", "file_name": "a.jpg", "box_id": "box"}
+
+
+def _box_event(
+    *, label_name: str = "face", geometry: tuple[float, float, float, float]
+) -> BoxEvent:
+    return BoxEvent(**_KEYS, is_deleted=False, label_name=label_name, geometry=geometry)
+
+
+_TOMBSTONE = BoxEvent(**_KEYS, is_deleted=True, label_name=None, geometry=None)
+
+
+@pytest.mark.parametrize(
+    argnames=("event", "source", "expected"),
+    argvalues=[
+        pytest.param(
+            _box_event(geometry=(10.0, 21.0, 30.0, 40.0)),
+            _SOURCE,
+            None,
+            id="the source as LightlyStudio rounds it",
+        ),
+        pytest.param(
+            _box_event(label_name="other", geometry=(10.0, 21.0, 30.0, 40.0)),
+            _SOURCE,
+            Correction(
+                **_KEYS,
+                action=CorrectionAction.UPDATE,
+                label_name="other",
+                geometry=None,
+            ),
+            id="a relabel keeps the exact source",
+        ),
+        pytest.param(
+            _box_event(geometry=(11.0, 21.0, 30.0, 40.0)),
+            _SOURCE,
+            Correction(
+                **_KEYS,
+                action=CorrectionAction.UPDATE,
+                label_name=None,
+                geometry=(11.0, 21.0, 30.0, 40.0),
+            ),
+            id="a move",
+        ),
+        pytest.param(
+            _box_event(label_name="other", geometry=(11.0, 21.0, 30.0, 40.0)),
+            _SOURCE,
+            Correction(
+                **_KEYS,
+                action=CorrectionAction.UPDATE,
+                label_name="other",
+                geometry=(11.0, 21.0, 30.0, 40.0),
+            ),
+            id="a relabel and a move",
+        ),
+        pytest.param(
+            _TOMBSTONE,
+            _SOURCE,
+            Correction(
+                **_KEYS, action=CorrectionAction.DELETE, label_name=None, geometry=None
+            ),
+            id="a tombstone of a source box",
+        ),
+        pytest.param(
+            _box_event(geometry=(1.0, 2.0, 3.0, 4.0)),
+            None,
+            Correction(
+                **_KEYS,
+                action=CorrectionAction.ADD,
+                label_name="face",
+                geometry=(1.0, 2.0, 3.0, 4.0),
+            ),
+            id="a box that a curator drew",
+        ),
+        pytest.param(
+            _TOMBSTONE, None, None, id="a drawn box that a curator deleted again"
+        ),
+    ],
+)
+def test_an_event_folds_over_its_source_box(
+    event: BoxEvent, source: SilverBox | None, expected: Correction | None
+) -> None:
+    assert fold_event(event=event, source=source) == expected

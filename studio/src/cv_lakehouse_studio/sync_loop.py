@@ -12,7 +12,6 @@ is at the migration that its own LightlyStudio build expects.
 from __future__ import annotations
 
 import logging
-import threading
 import time
 
 import psycopg
@@ -27,7 +26,6 @@ from cv_lakehouse_studio.studio_settings import StudioSettings
 from cv_lakehouse_studio.sync import (
     DEFAULT_STATEMENT_TIMEOUT_SECONDS,
     SyncReport,
-    read_synced_gold,
     sync_dataset,
 )
 from cv_lakehouse_studio.sync_state import create_sync_schema
@@ -66,7 +64,7 @@ def sync_every_dataset(
     max_images: int = DEFAULT_MAX_IMAGES_PER_DATASET,
     statement_timeout_seconds: float = DEFAULT_STATEMENT_TIMEOUT_SECONDS,
 ) -> list[SyncReport]:
-    """Sync each Studio dataset whose gold changed since its last sync.
+    """Overwrite every Studio dataset with gold.
 
     The caller connects `db_manager` first.
     """
@@ -80,14 +78,8 @@ def sync_every_dataset(
             session=session, client=client, dataset=dataset, max_images=max_images
         )
         for studio_dataset in studio_datasets:
-            synced = read_synced_gold(
-                session=session, studio_dataset=studio_dataset.name
-            )
-            if synced == (meta.version, meta.built_at):
-                continue
             report = sync_dataset(
                 client=client,
-                meta=meta,
                 dataset=dataset,
                 studio_dataset=studio_dataset,
                 class_names=class_names,
@@ -99,8 +91,8 @@ def sync_every_dataset(
     return reports
 
 
-def run_sync_loop(settings: StudioSettings, sync_lock: threading.Lock) -> None:
-    """Run forever. Hold `sync_lock` during a run, so the export waits for its end."""
+def run_sync_loop(settings: StudioSettings) -> None:
+    """Run forever."""
     client = HttpGoldClient(
         base_url=settings.gold_api_url,
         timeout_seconds=settings.request_timeout_seconds,
@@ -111,16 +103,15 @@ def run_sync_loop(settings: StudioSettings, sync_lock: threading.Lock) -> None:
     while True:
         try:
             reject_schema_mismatch(settings.database_url)
-            with sync_lock:
-                if not connected:
-                    db_manager.connect(db_url=settings.database_url)
-                    connected = True
-                sync_every_dataset(
-                    client=client,
-                    image_base=settings.image_base,
-                    max_images=settings.max_images_per_dataset,
-                    statement_timeout_seconds=settings.statement_timeout_seconds,
-                )
+            if not connected:
+                db_manager.connect(db_url=settings.database_url)
+                connected = True
+            sync_every_dataset(
+                client=client,
+                image_base=settings.image_base,
+                max_images=settings.max_images_per_dataset,
+                statement_timeout_seconds=settings.statement_timeout_seconds,
+            )
         except Exception:
             # A failed run changes nothing, and the next run starts from gold again.
             logger.exception("The sync failed. The next run tries again.")

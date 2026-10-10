@@ -2,18 +2,21 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Build one gold version from the silver datasets on disk.
+"""Build gold from the current silver build of each dataset.
 
-A build never touches the version a reader has open. It writes a new directory, then
-replaces the manifest that points at it, then removes the versions nothing points at.
+Gold is the union of the silver datasets, with the role columns, and without the
+flagged boxes. Nothing else: a build reads no earlier gold, so a rebuild from the same
+silver gives the same rows.
 
-`changed_at` is the build that last changed a row. A row that is equal to its row in
-the previous version keeps the previous time, so a reader can ask what changed since.
+A build never touches the build a reader has open. It writes a new directory, then
+replaces the manifest that points at it, then removes the builds nothing points at. The
+id of a build digests the code version and the silver builds, so a run on the same
+silver writes nothing.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -21,14 +24,12 @@ import duckdb
 import pyarrow as pa
 from upath import UPath
 
-from lakehouse_core.lake_files import remove_tree, replace_file
 from lakehouse_core.lake_store import LakeStore
-from lakehouse_core.manifest_files import read_manifest, write_manifest
-from lakehouse_core.parquet_files import open_parquet_writer, read_parquet_schema
+from lakehouse_core.manifest_files import read_manifest
+from lakehouse_core.parquet_files import open_parquet_writer
 from lakehouse_cv.contract.box_identity import IMAGE_ID_SQL
 from lakehouse_cv.contract.dataset_spec import DatasetSpec
 from lakehouse_cv.contract.gold_tables import (
-    CHANGED_AT_COLUMN,
     FLAG_COLUMNS,
     GOLD_BOX_SCHEMA,
     GOLD_IMAGE_SCHEMA,
@@ -37,11 +38,9 @@ from lakehouse_cv.contract.gold_tables import (
 )
 from lakehouse_cv.contract.manifests import (
     GOLD_MANIFEST,
-    SILVER_MANIFEST,
     GoldDataset,
     GoldManifest,
     GoldSplit,
-    SilverManifest,
 )
 from lakehouse_cv.contract.silver_tables import (
     ROWS_PER_ROW_GROUP,
@@ -49,10 +48,13 @@ from lakehouse_cv.contract.silver_tables import (
     images_file,
 )
 from lakehouse_cv.settings import CvLakePaths
-
-# The current version and the one before it. A reader that opened the manifest just
-# before a build still finds its files.
-GOLD_VERSIONS_KEPT = 2
+from lakehouse_cv.transforms.layer_builds import (
+    derive_build_id,
+    publish_build,
+    read_silver_build,
+    reuse_whole_build,
+    silver_build_dir,
+)
 
 _IMAGE_ROWS = f"""
 select
@@ -79,10 +81,9 @@ where not ({" or ".join(f"coalesce({name}, false)" for name in FLAG_COLUMNS)})
 @dataclass(frozen=True)
 class GoldBuild:
     manifest: GoldManifest
-    num_images: int
-    num_boxes: int
-    # A registered dataset with no silver on disk. Gold holds what is materialized.
-    skipped_datasets: tuple[str, ...]
+    # None for a build that an earlier run wrote.
+    num_images: int | None
+    num_boxes: int | None
 
 
 def read_gold_manifest(paths: CvLakePaths) -> GoldManifest | None:
@@ -92,37 +93,47 @@ def read_gold_manifest(paths: CvLakePaths) -> GoldManifest | None:
     return read_manifest(path=path, model=GoldManifest)
 
 
-def build_gold_version(
+def build_gold(
     *,
     store: LakeStore,
     paths: CvLakePaths,
     specs: Sequence[DatasetSpec],
+    silver_build_ids: Mapping[str, str],
     code_version: str,
     built_at: datetime,
 ) -> GoldBuild:
-    previous = read_gold_manifest(paths)
-    version = 1 if previous is None else previous.version + 1
-    version_dir = paths.gold_version_dir(version)
-    # A build that failed leaves a directory that no manifest points at.
-    remove_tree(version_dir)
-    previous_dir = (
-        None if previous is None else paths.gold_version_dir(previous.version)
+    """Join the given silver build of every dataset in `specs`.
+
+    A dataset with no silver build fails the build. Gold holds its declared inputs, not
+    what happens to be on disk.
+    """
+    if not specs:
+        raise ValueError("Gold needs at least one dataset.")
+    missing = [spec.name for spec in specs if spec.name not in silver_build_ids]
+    if missing:
+        raise ValueError(f"No silver build is given for {missing}.")
+    build_id = derive_build_id(
+        [
+            code_version,
+            *(f"{spec.name}/{silver_build_ids[spec.name]}" for spec in specs),
+        ]
     )
+    manifest_path = paths.gold_dir() / GOLD_MANIFEST
+    whole = reuse_whole_build(
+        manifest_path=manifest_path, build_id=build_id, model=GoldManifest
+    )
+    if whole is not None:
+        return GoldBuild(manifest=whole, num_images=None, num_boxes=None)
+    gold_dir = paths.gold_build_dir(build_id)
 
     datasets: list[GoldDataset] = []
-    skipped: list[str] = []
     num_images = num_boxes = 0
     with store.duckdb() as connection:
-        # A timestamp then reaches Arrow in UTC, whatever the machine is set to.
-        connection.execute("set TimeZone = 'UTC'")
         for spec in specs:
-            silver_dir = paths.silver_dir(spec.name)
-            if not (silver_dir / SILVER_MANIFEST).exists():
-                skipped.append(spec.name)
-                continue
-            silver = read_manifest(
-                path=silver_dir / SILVER_MANIFEST, model=SilverManifest
+            silver = read_silver_build(
+                paths=paths, name=spec.name, build_id=silver_build_ids[spec.name]
             )
+            silver_dir = silver_build_dir(paths=paths, manifest=silver)
             splits: list[GoldSplit] = []
             for split in silver.splits:
                 gold_split = GoldSplit(
@@ -134,28 +145,19 @@ def build_gold_version(
                 constants = {
                     "role": gold_split.role.value,
                     "commercial_use": silver.commercial_use,
-                    "built_at": built_at,
                 }
                 num_images += _write_rows(
                     connection=connection,
                     rows=_IMAGE_ROWS,
                     parameters={
                         **constants,
-                        "silver": str(images_file(silver_dir=silver_dir, split=split)),
+                        "silver": str(images_file(build_dir=silver_dir, split=split)),
                         "image_root": gold_split.image_root,
                         "license": silver.license,
                     },
                     schema=GOLD_IMAGE_SCHEMA,
-                    key="image_id",
                     path=gold_images_file(
-                        version_dir=version_dir, dataset=spec.name, split=split
-                    ),
-                    previous_path=_find_previous_file(
-                        previous_dir=previous_dir,
-                        gold_file=gold_images_file,
-                        schema=GOLD_IMAGE_SCHEMA,
-                        dataset=spec.name,
-                        split=split,
+                        build_dir=gold_dir, dataset=spec.name, split=split
                     ),
                 )
                 num_boxes += _write_rows(
@@ -163,19 +165,11 @@ def build_gold_version(
                     rows=_BOX_ROWS,
                     parameters={
                         **constants,
-                        "silver": str(boxes_file(silver_dir=silver_dir, split=split)),
+                        "silver": str(boxes_file(build_dir=silver_dir, split=split)),
                     },
                     schema=GOLD_BOX_SCHEMA,
-                    key="box_id",
                     path=gold_boxes_file(
-                        version_dir=version_dir, dataset=spec.name, split=split
-                    ),
-                    previous_path=_find_previous_file(
-                        previous_dir=previous_dir,
-                        gold_file=gold_boxes_file,
-                        schema=GOLD_BOX_SCHEMA,
-                        dataset=spec.name,
-                        split=split,
+                        build_dir=gold_dir, dataset=spec.name, split=split
                     ),
                 )
             datasets.append(
@@ -184,42 +178,20 @@ def build_gold_version(
                     license=silver.license,
                     commercial_use=silver.commercial_use,
                     silver_code_version=silver.code_version,
-                    embedding_model=silver.embedding_model,
-                    correction_snapshot_id=silver.correction_snapshot_id,
+                    silver_build_id=silver.build_id,
+                    last_event=silver.last_event,
                     splits=splits,
                 )
             )
-    if not datasets:
-        raise RuntimeError(f"No silver dataset is materialized under {paths.root}")
 
     manifest = GoldManifest(
-        version=version, built_at=built_at, code_version=code_version, datasets=datasets
+        build_id=build_id,
+        built_at=built_at,
+        code_version=code_version,
+        datasets=datasets,
     )
-    _replace_gold_manifest(paths=paths, manifest=manifest)
-    _prune_gold_versions(paths=paths, current_version=version)
-    return GoldBuild(
-        manifest=manifest,
-        num_images=num_images,
-        num_boxes=num_boxes,
-        skipped_datasets=tuple(skipped),
-    )
-
-
-def _find_previous_file(
-    *,
-    previous_dir: UPath | None,
-    gold_file: Callable[..., UPath],
-    schema: pa.Schema,
-    dataset: str,
-    split: str,
-) -> UPath | None:
-    if previous_dir is None:
-        return None
-    path = gold_file(version_dir=previous_dir, dataset=dataset, split=split)
-    if not path.exists():
-        return None
-    # A version that an older schema wrote has nothing to compare a new column with.
-    return path if read_parquet_schema(path) == schema else None
+    publish_build(manifest_path=manifest_path, manifest=manifest)
+    return GoldBuild(manifest=manifest, num_images=num_images, num_boxes=num_boxes)
 
 
 def _write_rows(
@@ -228,18 +200,12 @@ def _write_rows(
     rows: str,
     parameters: dict[str, object],
     schema: pa.Schema,
-    key: str,
     path: UPath,
-    previous_path: UPath | None,
 ) -> int:
     """Write the rows of one split, in the columns and the types of the schema."""
-    if previous_path is not None:
-        parameters = {**parameters, "previous": str(previous_path)}
+    selected = ", ".join(schema.names)
     reader = connection.execute(
-        query=_build_changed_at_query(
-            rows=rows, schema=schema, key=key, has_previous=previous_path is not None
-        ),
-        parameters=parameters,
+        query=f"select {selected} from ({rows})", parameters=parameters
     ).to_arrow_reader(ROWS_PER_ROW_GROUP)
     count = 0
     with open_parquet_writer(path=path, schema=schema) as writer:
@@ -249,40 +215,3 @@ def _write_rows(
             writer.write_batch(batch.cast(schema))
             count += batch.num_rows
     return count
-
-
-def _build_changed_at_query(
-    *, rows: str, schema: pa.Schema, key: str, has_previous: bool
-) -> str:
-    columns = [name for name in schema.names if name != CHANGED_AT_COLUMN]
-    selected = ", ".join(f"c.{name}" for name in columns)
-    built_at = "cast($built_at as timestamptz)"
-    if not has_previous:
-        return (
-            f"with c as ({rows}) "
-            f"select {selected}, {built_at} as {CHANGED_AT_COLUMN} from c"
-        )
-    unchanged = " and ".join(
-        f"c.{name} is not distinct from p.{name}" for name in columns
-    )
-    return f"""
-    with c as ({rows})
-    select {selected},
-           case when {unchanged} then p.{CHANGED_AT_COLUMN} else {built_at} end
-               as {CHANGED_AT_COLUMN}
-    from c
-    left join read_parquet($previous) p on p.{key} = c.{key}
-    """
-
-
-def _replace_gold_manifest(paths: CvLakePaths, manifest: GoldManifest) -> None:
-    path = paths.gold_dir() / GOLD_MANIFEST
-    staged = path.with_suffix(".json.staged")
-    write_manifest(path=staged, manifest=manifest)
-    replace_file(source=staged, target=path)
-
-
-def _prune_gold_versions(paths: CvLakePaths, current_version: int) -> None:
-    for version_dir in paths.gold_version_dir(current_version).parent.iterdir():
-        if int(version_dir.name) <= current_version - GOLD_VERSIONS_KEPT:
-            remove_tree(version_dir)

@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Write the embedding files of one silver split, and reuse every vector that exists.
+"""Write the embedding files of one split, and reuse every vector that exists.
 
 A vector depends on the pixels, the crop and the model. Bronze pins the pixels, and a
 crop embedding row holds its crop. So a vector of an earlier run stays right while its
 file names the same model, whatever else in silver changed since.
 
-The new vectors go into parts beside the target, one closed file at a time. A run that
-stops keeps every closed part, and the next run reuses it. The target is written last,
-one range of ids at a time, so a split of any size fits in memory.
+The new vectors go into parts in a directory that outlives the run, one closed file at
+a time. A run that stops keeps every closed part, and the next run reuses it. The
+target is written last, one range of ids at a time, so a split of any size fits in
+memory.
 """
 
 from __future__ import annotations
@@ -58,7 +59,6 @@ ROWS_PER_PART = 65_536
 # The target is written in ranges of ids of about this many rows, which is 128 MB.
 ROWS_PER_RANGE = 65_536
 
-_PARTS_SUFFIX = ".parts"
 _PART_SUFFIX = ".parquet"
 _NEXT_SUFFIX = ".next"
 
@@ -131,8 +131,16 @@ IMAGE_VECTORS = VectorTable(
     embed=_embed_images,
 )
 
-# `round_even` rounds half to even, as Python's `round` does. A box under half a pixel
-# still names one pixel, so the crop on the server has an area.
+# The box on the pixel grid, from a silver or a gold box row. `round_even` rounds half
+# to even, as Python's `round` does. A box under half a pixel still names one pixel, so
+# the crop on the server has an area.
+CROP_SQL = """
+round_even(x, 0)::integer as crop_x,
+round_even(y, 0)::integer as crop_y,
+greatest(1, round_even(w, 0))::integer as crop_width,
+greatest(1, round_even(h, 0))::integer as crop_height
+"""
+
 CROP_VECTORS = VectorTable(
     label="crop embeddings",
     schema=CROP_EMBEDDING_SCHEMA,
@@ -140,18 +148,27 @@ CROP_VECTORS = VectorTable(
     match_columns=("box_id", "crop_x", "crop_y", "crop_width", "crop_height"),
     rows_file=boxes_file,
     target_file=crop_embeddings_file,
-    rows_query="""
-    select dataset, split, file_name, box_id, box_index,
-           round_even(x, 0)::integer as crop_x,
-           round_even(y, 0)::integer as crop_y,
-           greatest(1, round_even(w, 0))::integer as crop_width,
-           greatest(1, round_even(h, 0))::integer as crop_height
+    rows_query=f"""
+    select dataset, split, file_name, box_id, box_index, {CROP_SQL}
     from read_parquet($rows)
     """,
     embed=_embed_crops,
 )
 
 VECTOR_TABLES = (IMAGE_VECTORS, CROP_VECTORS)
+
+
+@dataclass(frozen=True)
+class SplitVectorFiles:
+    """The files that one run reads and writes for one split and one table."""
+
+    # The silver file whose rows need a vector.
+    rows: UPath
+    target: UPath
+    # The files of earlier runs. A vector in them serves a row of the same key.
+    reusable: tuple[UPath, ...]
+    # Where the new vectors wait for the target. It outlives a run that stops.
+    parts_dir: UPath
 
 
 @dataclass(frozen=True)
@@ -169,53 +186,35 @@ def write_vectors(
     store: LakeStore,
     embedder: Embedder,
     table: VectorTable,
-    silver_dir: UPath,
-    split: str,
+    files: SplitVectorFiles,
     locate_image: Callable[[str], str],
     log: Callable[[str], None],
 ) -> VectorCount:
     """Write the embedding file of one split, and embed only a row with no vector."""
-    target = table.target_file(silver_dir=silver_dir, split=split)
-    parts_dir = parts_dir_of(target)
-    _remove_unusable_parts(table=table, parts_dir=parts_dir)
+    _remove_unusable_parts(table=table, parts_dir=files.parts_dir)
+    label = f"{files.target.stem} {table.label}"
     with store.duckdb() as connection:
-        select_wanted_rows(
-            connection=connection,
-            table=table,
-            rows=table.rows_file(silver_dir=silver_dir, split=split),
-        )
+        select_wanted_rows(connection=connection, table=table, rows=files.rows)
         embedded = _embed_missing_rows(
             connection=connection,
             embedder=embedder,
             table=table,
-            pool=list_vector_files(table=table, target=target),
-            parts_dir=parts_dir,
+            pool=list_vector_files(table=table, files=files),
+            parts_dir=files.parts_dir,
             locate_image=locate_image,
-            progress_label=f"{split} {table.label} to embed",
+            progress_label=f"{label} to embed",
             log=log,
         )
         written = write_sorted_vectors(
             connection=connection,
             table=table,
-            pool=list_vector_files(table=table, target=target),
-            target=target,
-            progress_label=f"{split} {table.label} to write",
+            pool=list_vector_files(table=table, files=files),
+            target=files.target,
+            progress_label=f"{label} to write",
             log=log,
         )
-    remove_tree(parts_dir)
+    remove_tree(files.parts_dir)
     return VectorCount(written=written, embedded=embedded)
-
-
-def clear_vectors(silver_dir: UPath, split: str) -> None:
-    """Remove the embedding files of one split, and their parts.
-
-    A rematerialisation with no server rewrites the images and the boxes, so a vector
-    left behind describes pixels that a query no longer has a row for.
-    """
-    for table in VECTOR_TABLES:
-        target = table.target_file(silver_dir=silver_dir, split=split)
-        target.unlink(missing_ok=True)
-        remove_tree(parts_dir_of(target))
 
 
 def holds_vectors_of_this_model(*, table: VectorTable, path: UPath) -> bool:
@@ -421,17 +420,13 @@ def _count_rows(*, connection: duckdb.DuckDBPyConnection, table_name: str) -> in
     return 0 if row is None else int(row[0])
 
 
-def parts_dir_of(target: UPath) -> UPath:
-    return target.with_name(target.name + _PARTS_SUFFIX)
-
-
-def list_vector_files(*, table: VectorTable, target: UPath) -> list[UPath]:
-    """Return the target and the closed parts that hold vectors of this model."""
-    parts_dir = parts_dir_of(target)
+def list_vector_files(*, table: VectorTable, files: SplitVectorFiles) -> list[UPath]:
+    """Return the reusable files and the parts that hold vectors of this model."""
+    parts_dir = files.parts_dir
     parts = sorted(parts_dir.glob(f"*{_PART_SUFFIX}")) if parts_dir.exists() else []
     return [
         path
-        for path in [target, *parts]
+        for path in [*files.reusable, *parts]
         if path.exists() and holds_vectors_of_this_model(table=table, path=path)
     ]
 

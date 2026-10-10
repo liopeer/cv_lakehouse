@@ -7,8 +7,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import dagster as dg
 import duckdb
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -18,13 +18,19 @@ from lakehouse_cv.contract.gold_tables import (
     gold_boxes_file,
     gold_images_file,
 )
-from lakehouse_cv.contract.silver_tables import boxes_file
 from lakehouse_cv.defs import gold as gold_defs
 from lakehouse_cv.defs import silver as silver_defs
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
-from lakehouse_cv.transforms.gold_build import build_gold_version, read_gold_manifest
-from tests.lake_runs import DATASETS, materialize_assets, materialize_bronze_links
+from lakehouse_cv.transforms.gold_build import build_gold, read_gold_manifest
+from lakehouse_cv.transforms.layer_builds import read_silver_manifest
+from tests.lake_runs import (
+    DATASETS,
+    materialize_assets,
+    materialize_bronze_links,
+    read_silver_build_ids,
+    run_assets,
+)
 
 SPECS = [source.spec for source in SOURCE_BY_NAME.values()]
 FIRST_BUILD = datetime(2026, 1, 1, tzinfo=UTC)
@@ -42,23 +48,25 @@ def silver_lake(
     return lake
 
 
-def _build(lake: CvLakeResource, built_at: datetime) -> int:
-    build = build_gold_version(
+def _build(lake: CvLakeResource, built_at: datetime, code_version: str = "test") -> str:
+    build = build_gold(
         store=lake.store,
         paths=lake.paths,
         specs=SPECS,
-        code_version="test",
+        silver_build_ids=read_silver_build_ids(
+            lake=lake, names=[spec.name for spec in SPECS]
+        ),
+        code_version=code_version,
         built_at=built_at,
     )
-    return build.manifest.version
+    return build.manifest.build_id
 
 
 def _query(lake: CvLakeResource, table: str, select: str) -> list[tuple]:
     manifest = read_gold_manifest(lake.paths)
     assert manifest is not None
-    files = lake.paths.gold_version_dir(manifest.version) / table / "*" / "*.parquet"
+    files = lake.paths.gold_build_dir(manifest.build_id) / table / "*" / "*.parquet"
     with duckdb.connect() as connection:
-        connection.execute("set TimeZone = 'UTC'")
         return connection.execute(
             f"select {select} from read_parquet('{files}') group by all order by all"
         ).fetchall()
@@ -79,14 +87,14 @@ def test_gold_unions_every_silver_dataset(silver_lake: CvLakeResource) -> None:
 
 
 def test_gold_writes_its_schema_to_every_file(silver_lake: CvLakeResource) -> None:
-    version_dir = silver_lake.paths.gold_version_dir(
+    gold_dir = silver_lake.paths.gold_build_dir(
         _build(lake=silver_lake, built_at=FIRST_BUILD)
     )
     manifest = read_gold_manifest(silver_lake.paths)
     assert manifest is not None
     for dataset in manifest.datasets:
         for split in dataset.splits:
-            names = {"version_dir": version_dir, "dataset": dataset.dataset}
+            names = {"build_dir": gold_dir, "dataset": dataset.dataset}
             images = pq.read_schema(gold_images_file(**names, split=split.split))
             boxes = pq.read_schema(gold_boxes_file(**names, split=split.split))
             assert images == GOLD_IMAGE_SCHEMA
@@ -133,78 +141,131 @@ def test_gold_names_every_pixel_relative_to_the_lake_root(
     assert all((silver_lake.paths.root / path).is_file() for (path,) in paths)
 
 
-def test_a_rebuild_with_no_change_keeps_changed_at(silver_lake: CvLakeResource) -> None:
-    assert _build(lake=silver_lake, built_at=FIRST_BUILD) == 1
-    assert _build(lake=silver_lake, built_at=SECOND_BUILD) == 2
-
-    for table in ("images", "boxes"):
-        assert _query(lake=silver_lake, table=table, select="changed_at") == [
-            (FIRST_BUILD,)
-        ]
-
-
-def test_a_changed_box_gets_the_time_of_its_build(silver_lake: CvLakeResource) -> None:
+def test_a_rebuild_from_the_same_silver_gives_the_same_rows(
+    silver_lake: CvLakeResource,
+) -> None:
     _build(lake=silver_lake, built_at=FIRST_BUILD)
-    path = boxes_file(
-        silver_dir=silver_lake.paths.silver_dir("wider_face"), split="val"
-    )
-    table = pq.read_table(path)
-    moved = table.set_column(
-        table.schema.get_field_index("x"),
-        table.schema.field("x"),
-        pa.array([99.0], type=pa.float64()),
-    )
-    pq.write_table(table=moved, where=path)
+    before = {
+        table: _query(lake=silver_lake, table=table, select="*")
+        for table in ("images", "boxes")
+    }
 
     _build(lake=silver_lake, built_at=SECOND_BUILD)
 
-    assert _query(
-        lake=silver_lake, table="boxes", select="dataset, split, changed_at, count(*)"
-    ) == [
-        ("open_images", "test", FIRST_BUILD, 1),
-        ("open_images", "train", FIRST_BUILD, 1),
-        ("open_images", "validation", FIRST_BUILD, 3),
-        ("pp4av", "fisheye", FIRST_BUILD, 1),
-        ("pp4av", "test", FIRST_BUILD, 2),
-        ("wider_face", "train", FIRST_BUILD, 1),
-        ("wider_face", "val", SECOND_BUILD, 1),
-    ]
+    for table, rows in before.items():
+        assert _query(lake=silver_lake, table=table, select="*") == rows
 
 
-def test_gold_keeps_the_current_version_and_the_one_before(
+def test_gold_keeps_the_current_build_and_the_one_before(
     silver_lake: CvLakeResource,
 ) -> None:
-    for built_at in (FIRST_BUILD, SECOND_BUILD, SECOND_BUILD):
-        _build(lake=silver_lake, built_at=built_at)
-    versions = silver_lake.paths.gold_dir() / "versions"
-    assert sorted(path.name for path in versions.iterdir()) == ["2", "3"]
+    first = _build(lake=silver_lake, built_at=FIRST_BUILD, code_version="a")
+    second = _build(lake=silver_lake, built_at=SECOND_BUILD, code_version="b")
+    third = _build(lake=silver_lake, built_at=SECOND_BUILD, code_version="c")
+
+    builds = silver_lake.paths.gold_dir() / "builds"
+    assert {path.name for path in builds.iterdir()} == {second, third}
+    assert first not in {second, third}
 
 
-def test_gold_leaves_out_a_dataset_with_no_silver(
+def test_a_build_of_the_same_silver_and_code_is_the_same_build(
+    silver_lake: CvLakeResource,
+) -> None:
+    first = _build(lake=silver_lake, built_at=FIRST_BUILD)
+    files = silver_lake.paths.gold_build_dir(first) / "boxes" / "pp4av" / "test.parquet"
+    written = files.stat().st_mtime_ns
+
+    assert _build(lake=silver_lake, built_at=SECOND_BUILD) == first
+    assert files.stat().st_mtime_ns == written
+    manifest = read_gold_manifest(silver_lake.paths)
+    assert manifest is not None
+    assert manifest.built_at == FIRST_BUILD
+
+
+def test_gold_reads_the_silver_build_that_dagster_recorded(
+    lake: CvLakeResource, bronze_sources: dict[str, Path]
+) -> None:
+    """A silver manifest that moved after the run is no input of gold."""
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
+    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("pp4av")])
+    recorded = read_silver_manifest(paths=lake.paths, name="pp4av").build_id
+    manifest_path = lake.paths.silver_dir("pp4av") / "_silver.json"
+    manifest_path.write_text(manifest_path.read_text().replace(recorded, "elsewhere"))
+    asset = gold_defs.build_gold_asset()
+
+    result = run_assets(
+        lake=lake,
+        assets=[asset],
+        run_config=dg.RunConfig(
+            ops={asset.op.name: gold_defs.GoldConfig(datasets=["pp4av"])}
+        ),
+    )
+
+    assert result.success
+    gold = read_gold_manifest(lake.paths)
+    assert gold is not None
+    assert [dataset.silver_build_id for dataset in gold.datasets] == [recorded]
+    (materialization,) = result.get_asset_materialization_events()
+    tags = materialization.materialization.tags or {}
+    assert tags["dagster/data_version"] == gold.build_id
+
+
+def test_gold_records_the_silver_build_of_each_dataset(
+    silver_lake: CvLakeResource,
+) -> None:
+    _build(lake=silver_lake, built_at=FIRST_BUILD)
+    manifest = read_gold_manifest(silver_lake.paths)
+    assert manifest is not None
+    for dataset in manifest.datasets:
+        silver = read_silver_manifest(paths=silver_lake.paths, name=dataset.dataset)
+        assert dataset.silver_build_id == silver.build_id
+
+
+def test_gold_fails_on_a_dataset_with_no_silver(
     lake: CvLakeResource, bronze_sources: dict[str, Path]
 ) -> None:
     materialize_bronze_links(lake=lake, sources=bronze_sources)
     materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("pp4av")])
 
-    build = build_gold_version(
-        store=lake.store,
-        paths=lake.paths,
-        specs=SPECS,
-        code_version="test",
-        built_at=FIRST_BUILD,
+    result = run_assets(
+        assets=[gold_defs.build_gold_asset()],
+        lake=lake,
+        raise_on_error=False,
     )
 
-    assert [dataset.dataset for dataset in build.manifest.datasets] == ["pp4av"]
-    assert set(build.skipped_datasets) == {"open_images", "wider_face"}
-    assert (build.num_images, build.num_boxes) == (2, 3)
+    assert not result.success
+    assert read_gold_manifest(lake.paths) is None
 
 
-def test_gold_fails_with_no_silver_at_all(lake: CvLakeResource) -> None:
-    with pytest.raises(expected_exception=RuntimeError, match="No silver"):
-        build_gold_version(
-            store=lake.store,
-            paths=lake.paths,
-            specs=SPECS,
-            code_version="test",
-            built_at=FIRST_BUILD,
-        )
+def test_gold_joins_the_datasets_of_its_config(
+    lake: CvLakeResource, bronze_sources: dict[str, Path]
+) -> None:
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
+    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("pp4av")])
+    asset = gold_defs.build_gold_asset()
+
+    result = run_assets(
+        assets=[asset],
+        lake=lake,
+        run_config=dg.RunConfig(
+            ops={asset.op.name: gold_defs.GoldConfig(datasets=["pp4av"])}
+        ),
+    )
+
+    assert result.success
+    manifest = read_gold_manifest(lake.paths)
+    assert manifest is not None
+    assert [dataset.dataset for dataset in manifest.datasets] == ["pp4av"]
+
+
+def test_gold_rejects_a_dataset_that_is_not_registered(lake: CvLakeResource) -> None:
+    asset = gold_defs.build_gold_asset()
+    result = run_assets(
+        assets=[asset],
+        lake=lake,
+        run_config=dg.RunConfig(
+            ops={asset.op.name: gold_defs.GoldConfig(datasets=["no_such_dataset"])}
+        ),
+        raise_on_error=False,
+    )
+    assert not result.success

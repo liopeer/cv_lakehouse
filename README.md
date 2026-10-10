@@ -55,7 +55,7 @@ engines on the first start. See [triton/README.md](triton/README.md).
 | Layer | What it is | How it materializes |
 | --- | --- | --- |
 | bronze | the raw dataset, complete, as published | download it, or link a complete copy |
-| silver | one dataset, normalised | four Parquet files per split, on the class registry |
+| silver | one dataset, normalised | two Parquet files per split, on the class registry, and two of vectors |
 | gold | every dataset in one table set | two Parquet files per dataset and split, with a role |
 
 Bronze holds every file that a dataset publishes, byte for byte, in the layout of a
@@ -76,10 +76,21 @@ Silver now writes one row per image and one row per box, so a box carries its gr
 flags and the class name its source used. The layer is queryable with no code of ours:
 
 ```bash
+build=$(jq -r .build_id "$CV_LAKEHOUSE_ROOT/silver/wider_face/_silver.json")
 duckdb -c "select class_name, count(*), avg(w * h)
-           from read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/boxes/*.parquet')
+           from read_parquet('$CV_LAKEHOUSE_ROOT/silver/wider_face/builds/$build/boxes/*.parquet')
            group by 1"
 ```
+
+A run writes a new build under `builds/`, checks every box, and only then replaces
+`_silver.json`, which names the build. A run that fails leaves the last good build in
+place. Silver keeps the current build and the one before it.
+
+The id of a build digests the code version and the inputs: bronze and the event files
+for silver, the silver build for the embeddings, and the silver builds for gold. A run
+on the same inputs writes nothing. Each asset reports its build id to Dagster as its
+data version, and the asset downstream reads that build by its id. See
+[ADR 0015](docs/adr/0015-every-asset-is-a-pure-function.md).
 
 Every dataset writes the same columns and leaves the ones it knows nothing about null, so
 a scan across datasets needs no `union_by_name`. An `attr_*` column holds a per box
@@ -102,15 +113,17 @@ for a query and for training.
 
 ### Corrections in silver
 
-Silver applies the latest [correction snapshot](#corrections) of its dataset on top of
-the normalised source. Bronze stays as published.
+Silver folds every [event file](#corrections) of its dataset over the normalised source.
+Bronze stays as published. Silver keeps the latest event of each box, in the order of
+the files and then of the log, and compares it with the source box:
 
-| A curator | Silver |
+| The latest event | Silver |
 | --- | --- |
-| relabels a box | takes the class. The box keeps its exact float coordinates |
-| moves a box | takes the whole pixels of LightlyStudio, clipped to the image |
-| deletes a box | drops it, and counts it under `dropped_reasons` as `studio_deleted` |
-| draws a box | adds it, under the id that LightlyStudio gave it |
+| holds another label | takes the class. The box keeps its exact float coordinates |
+| holds another box, in whole pixels | takes the whole pixels of LightlyStudio, clipped to the image |
+| is a tombstone | drops the box, and counts it under `dropped_reasons` as `studio_deleted` |
+| names a box that the source does not hold | adds it, under the id that LightlyStudio gave it |
+| equals the source box, rounded to whole pixels | changes nothing |
 
 - Three columns say what happened to a box: `origin` is `source` or `studio`, and
   `is_class_corrected` and `is_geometry_corrected` mark a change.
@@ -118,11 +131,12 @@ the normalised source. Bronze stays as published.
   neither.
 - A label that the class registry does not name becomes `other`, and `source_class`
   carries the label. To make it a class, add it to the registry.
-- The check `corrections_are_applied` lists such labels, and the corrections that found
-  no box. It warns and never blocks.
-- `_silver.json` names the snapshot that silver applied.
+- The check `corrections_are_applied` lists such labels, and the events that found no
+  image. It warns and never blocks.
+- `_silver.json` names the last log entry that silver folded, and `_gold.json` copies it.
+  The sync leaves a box that a curator edited after that entry.
 
-A new snapshot marks silver stale. Rebuild silver and gold by hand.
+A new event file marks silver stale. Rebuild silver and gold by hand.
 
 ### Flagged boxes
 
@@ -139,26 +153,16 @@ run logs it under `dropped_reasons`.
 
 ### Embeddings
 
-Silver also embeds, in the same run that normalises. Every image gets one MobileCLIP-S0
-vector, and so does every box, cropped to its own pixels. The vectors are 512 float32 and
-L2 normalised, so a cosine similarity is a dot product.
+The asset `silver/<dataset>_embeddings` embeds the current silver build. Every image gets
+one MobileCLIP-S0 vector, and so does every box, cropped to its own pixels. The vectors
+are 512 float32 and L2 normalised, so a cosine similarity is a dot product.
 
-They are separate files because a vector is 2 KB next to a box row of a few dozen bytes,
-and most queries over silver want the boxes. The keys are the keys of the other two
-files, so a join needs nothing else. A file is sorted by `image_id` or `box_id`, so a
-query on a few ids reads a few row groups:
-
-```bash
-duckdb -c "select b.class_name, count(*)
-           from read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/boxes/*.parquet') b
-           join read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/crop_embeddings/*.parquet') e
-             using (box_id)
-           where list_dot_product(e.embedding, (
-                 select embedding
-                 from read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/crop_embeddings/*.parquet')
-                 limit 1)) > 0.9
-           group by 1"
-```
+They are a separate asset because a vector is 2 KB next to a box row of a few dozen
+bytes, and most queries over silver want the boxes. Silver then means the same on a
+machine with no server. The keys are the keys of the silver files, so a join needs
+nothing else. A file is sorted by `image_id` or `box_id`, so a query on a few ids reads a
+few row groups. `_embeddings.json` names the current build, and the silver build that
+it covers.
 
 A [Triton](triton/README.md) server does the work. It is in `triton/`, it runs the two
 encoders as TensorRT engines, and it crops, resizes and normalises on the GPU, so this
@@ -169,36 +173,29 @@ it, and `triton/` builds the image.
 export CV_LAKEHOUSE_TRITON_URL=localhost:8011
 ```
 
-Silver reads the URL and skips the embedding when it is unset, so a machine with no
-server still builds the layer. The two counts land in the asset metadata either way.
+The embeddings asset fails when the URL is unset or the server does not answer. It
+never deletes a vector.
 
 The server resolves the path itself, so the stack mounts `$CV_LAKEHOUSE_ROOT` read only
 at the same path inside the container. If bronze links a copy outside the root, add a
 mount for that path to the compose file of the stack.
 
-A silver rebuild embeds only what has no vector yet, on any code. An image keeps its
-vector, because bronze pins the pixels. A box keeps its vector while its crop on the
-pixel grid is the same, so a relabelled box is not embedded again, and a moved or a
-drawn box is. The run metadata counts the vectors it reused.
+A run embeds only what has no vector yet, on any code. An image keeps its vector,
+because bronze pins the pixels. A box keeps its vector while its crop on the pixel grid
+is the same, so a relabelled box is not embedded again, and a moved or a drawn box is.
+The run metadata counts the vectors it reused.
 
 The footer of an embedding file names the model and `EMBEDDING_VERSION`. A file of
 another model or version is embedded again. A new model behind the same name is not
 detected: bump `EMBEDDING_VERSION`. See
 [ADR 0013](docs/adr/0013-silver-vectors-are-sorted-and-kept.md).
 
-A run writes new vectors to closed parts of 65536 vectors, beside the file. If a run
+A run writes new vectors to closed parts of 65536 vectors, under `parts/`. If a run
 stops, the next run reuses every closed part. The run log reports the progress of each
 step once a minute, with the rate and the time left.
 
-A file that silver wrote before ADR 0013 has no id column and no footer. Move it to the
-new layout once, with no new embedding:
-
-```bash
-python -m lakehouse_cv.maintenance.sort_silver_embeddings [DATASET ...]
-```
-
-The command reads the lake from the same variables as the code location. It skips a
-file of the new layout, so it can run again after it stops.
+Before this asset, silver kept the vectors in `silver/<dataset>/embeddings/` and
+`crop_embeddings/`. The first run of the asset reuses them. Delete them after that run.
 
 ### The class registry
 
@@ -238,6 +235,8 @@ them can enforce its own licence rule.
 ### Gold
 
 Gold joins the silver datasets into one table set. A consumer reads gold and no silver.
+Gold is a pure function of silver: it reads no earlier gold, no clock and no setting, so
+a rebuild from the same silver gives the same rows.
 
 - A row carries `image_id` or `box_id`, the dataset, the split and a role.
 - A role is `train`, `val` or `test`. Each source maps its own split names onto the
@@ -246,9 +245,7 @@ Gold joins the silver datasets into one table set. A consumer reads gold and no 
   rejected stay in silver.
 - `image_path` is relative to the lake root, so gold names a pixel on any machine. A pixel
   of a copy that bronze links from outside the lake keeps its absolute path or URL.
-- `changed_at` is the build that last changed the row. A row that a rebuild leaves
-  equal keeps its time.
-- Gold copies no embedding. The vectors stay in the silver files.
+- Gold copies no embedding. The vectors stay in the embeddings assets.
 
 | Dataset | Split | Role |
 | --- | --- | --- |
@@ -256,32 +253,44 @@ Gold joins the silver datasets into one table set. A consumer reads gold and no 
 | wider_face | train, val | train, val |
 | pp4av | test, fisheye | test, test |
 
-A build writes a new directory under `gold/versions/`, and then replaces `_gold.json`,
-which names the current version. A reader takes the version from `_gold.json`, so it
-never sees a half written build. Gold keeps the current version and the one before it.
+Gold has no versions. A build writes a new directory under `gold/builds/`, named by a
+digest of the code version and the silver builds, and then replaces `_gold.json`, which
+names the current build. A reader takes the
+build from `_gold.json`, so it never sees a half written build. Gold keeps the current
+build and the one before it. `_gold.json` also names the silver build of each dataset.
 
 ```bash
+build=$(jq -r .build_id "$CV_LAKEHOUSE_ROOT/gold/_gold.json")
 duckdb -c "select dataset, role, class_name, count(*)
-           from read_parquet('$CV_LAKEHOUSE_ROOT/gold/versions/1/boxes/*/*.parquet')
+           from read_parquet('$CV_LAKEHOUSE_ROOT/gold/builds/$build/boxes/*/*.parquet')
            group by all"
 ```
 
-A dataset with no silver on disk is left out, and the run logs its name.
+Gold joins every registered dataset, and a dataset with no silver fails the run. A lake
+that holds only some datasets names them in the run config of `gold/current`:
+
+```yaml
+ops:
+  gold__current:
+    config:
+      datasets: [pp4av]
+```
 
 ### Eval releases
 
 Gold changes with every correction, and a benchmark must not. The asset
 `gold/eval_release` freezes the val and test rows of every dataset under a number.
 
-- Each run copies the val and test files of the current gold version to
+- Each run copies the val and test files of the current gold build to
   `gold/releases/<number>/`, and writes `_release.json` with the checksum of every file.
 - A release never changes. The check `releases_are_unchanged` verifies every checksum.
 - The curators keep working on the gold above it. Their fixes to a val or a test row
   reach the next release, and no earlier one.
 - The run fails when the val and test rows are those of the last release.
 - One number covers every dataset, so a benchmark names one release.
-- `_release.json` names the gold version, the silver code version and the correction
-  snapshot of each dataset.
+- `_release.json` names the gold code version, and the silver build, the silver code
+  version and the last curator edit of each dataset. A release is the only frozen copy
+  of gold.
 - A release holds no vector.
 
 Run the asset by hand, when a round of corrections is done.
@@ -297,7 +306,7 @@ curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face&releas
 
 | Endpoint | Rows |
 | --- | --- |
-| `/v1/meta` | the gold manifest: the version, the datasets, the splits and their roles |
+| `/v1/meta` | the gold manifest: the build, the datasets, the splits and their roles, and the model of the vectors |
 | `/v1/releases`, `/v1/releases/{n}` | the eval releases, each with its files |
 | `/v1/classes` | the class registry, also before gold exists |
 | `/v1/images` | one per image |
@@ -312,7 +321,6 @@ curl 'localhost:8000/v1/boxes?dataset=wider_face&role=val&class_name=face&releas
 | `release` | which val and test rows: the number of a release, or `draft` |
 | `class_name` | boxes of these classes. Not on `/v1/images` and `/v1/embeddings` |
 | `commercial_use` | rows of the datasets with this licence answer |
-| `changed_since` | rows that a gold build changed after this time |
 | `shard`, `num_shards` | the images of one shard, and their boxes and vectors |
 | `limit`, `after` | one page. `limit` is 1000 by default and at most 100000 |
 
@@ -359,8 +367,8 @@ export CV_LAKEHOUSE_DUCKDB_THREADS=4
 export CV_LAKEHOUSE_DUCKDB_MEMORY_LIMIT=2GB
 ```
 
-Every layer runs on any root. On a local root, silver sends Triton image paths, and the
-container mounts the lake. On an object store, silver sends presigned URLs, valid for an
+Every layer runs on any root. On a local root, the embeddings send Triton image paths, and
+the container mounts the lake. On an object store, they send presigned URLs, valid for an
 hour, so Triton needs no mount and no credentials. That needs Triton 0.3.0 or newer.
 
 Bronze stages nothing on local disk. On S3 a download is a multipart upload, and a run
@@ -386,18 +394,23 @@ SeaweedFS, instead of moto.
 $CV_LAKEHOUSE_ROOT/
   bronze/<dataset>/            a manual download, or only the manifest of a linked copy
     _bronze.json                 every published file, with its URL and checksum
-  bronze/<dataset>_corrections/  the corrections that curators made in LightlyStudio
-    _corrections.json            every snapshot, with its checksum
-    snapshots/<id>/corrections.parquet   one immutable snapshot
+  bronze/<dataset>_corrections/  the edits that curators made in LightlyStudio
+    _corrections.json            every event file, with its checksum
+    events/<chain>/<id>/events.parquet   one immutable event file
+    snapshots/<id>/corrections.parquet   one snapshot of ADR 0009, as history
   silver/<dataset>/
-    images/<split>.parquet           one row per image
-    boxes/<split>.parquet            one row per box, XYWH pixels, exact floats
-    embeddings/<split>.parquet       one MobileCLIP vector per image, by image_id
-    crop_embeddings/<split>.parquet  one MobileCLIP vector per box crop, by box_id
+    _silver.json                     the current build
+    builds/<id>/images/<split>.parquet   one row per image
+    builds/<id>/boxes/<split>.parquet    one row per box, XYWH pixels, exact floats
+  silver/<dataset>_embeddings/
+    _embeddings.json                 the current build, and the silver build it covers
+    builds/<id>/embeddings/<split>.parquet       one vector per image, by image_id
+    builds/<id>/crop_embeddings/<split>.parquet  one vector per box crop, by box_id
+    parts/                           the vectors of a run that stopped
   gold/
-    _gold.json                       the current version, and its datasets
-    versions/<n>/images/<dataset>/<split>.parquet   one row per image
-    versions/<n>/boxes/<dataset>/<split>.parquet    one row per box
+    _gold.json                       the current build, and its datasets
+    builds/<id>/images/<dataset>/<split>.parquet   one row per image
+    builds/<id>/boxes/<dataset>/<split>.parquet    one row per box
     releases/<number>/               the frozen val and test files of one release
 ```
 
@@ -406,16 +419,16 @@ Only bronze holds pixels. Silver holds annotations, so it costs almost no disk.
 ## Curating gold in LightlyStudio
 
 [studio/](studio/README.md) holds a LightlyStudio server on Postgres, and a sync that
-loads gold into it through the gold API. Its start page lists every dataset. A curator's
-edit survives every later sync.
+writes gold into it through the gold API on every run. Its start page lists every
+dataset. A curator's edit stays until gold holds it.
 
 The loop, each step by hand:
 
 1. A curator relabels, moves, deletes or draws boxes in LightlyStudio.
-2. Materialize `bronze/<dataset>_corrections`. It fetches a snapshot of the corrections.
-3. Materialize `silver/<dataset>`, and then `gold/current`.
-4. The sync sees the new gold version on its next run. The corrected boxes stay as the
-   curator left them.
+2. Materialize `bronze/<dataset>_corrections`. It fetches an event file of the edits.
+3. Materialize `silver/<dataset>`, `silver/<dataset>_embeddings`, and then
+   `gold/current`.
+4. The next sync writes gold. The edited boxes stay as the curator left them.
 5. When a round of corrections is done, materialize `gold/eval_release`.
 
 ## Bronze
@@ -452,21 +465,24 @@ and the rest annotations.
 
 ### Corrections
 
-A curator fixes annotations in LightlyStudio. The export of [studio/](studio/README.md)
-publishes the fixes of a dataset as snapshots, and the asset
-`bronze/<dataset>_corrections` fetches them.
+A curator fixes annotations in LightlyStudio. The LightlyStudio database logs every edit.
+The export of [studio/](studio/README.md) publishes the logged edits of a dataset as
+event files, and the asset `bronze/<dataset>_corrections` fetches them. See
+[ADR 0014](docs/adr/0014-curator-edits-are-bronze-events.md).
 
 ```bash
 export CV_LAKEHOUSE_STUDIO_EXPORT_URL=http://studio-sync:8002
 ```
 
-- A snapshot is one Parquet file that never changes. It holds every correction that is
-  live when it is made, so the latest snapshot alone says what to change.
-- Bronze verifies the size and the checksum of a snapshot, and pins them in
+- An event file is one Parquet file that never changes. It holds one row per edited
+  box: the box as LightlyStudio held it, or a tombstone.
+- Bronze verifies the size and the checksum of a file, and pins them in
   `_corrections.json`.
-- Each snapshot names the one before it. The run fails when the chain breaks, or when
-  the export lists fewer snapshots than bronze holds. A LightlyStudio database that was
-  lost then cannot silently drop every correction.
+- Each file names the one before it, and the range of the log that it covers. The run
+  fails when the chain breaks, or when the export lists fewer files than bronze holds.
+- A new LightlyStudio database starts a new chain. Bronze keeps the old chain, and
+  silver folds both, so a lost database loses no edit.
+- The snapshots of ADR 0009 stay in bronze as history. Silver reads them no longer.
 - The asset has no upstream asset, so the graph stays acyclic.
 - When the variable is unset, the asset fetches nothing and still succeeds.
 

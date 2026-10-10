@@ -4,7 +4,7 @@ Copyright (c) 2025–2026 Lionel Peer
 -->
 # ADR 0009: Corrections are bronze snapshots
 
-- Status: accepted
+- Status: superseded by 0014
 - Date: 2026-10-03
 
 ## Context

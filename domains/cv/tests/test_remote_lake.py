@@ -26,6 +26,7 @@ from upath import UPath
 from lakehouse_cv.contract.manifests import CvBronzeManifest
 from lakehouse_cv.defs import gold as gold_defs
 from lakehouse_cv.defs import silver as silver_defs
+from lakehouse_cv.defs import silver_embeddings as embeddings_defs
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.gold_api.app import create_app
 from tests.fakes import FakeEmbedder
@@ -134,13 +135,7 @@ def _read_boxes(lake: CvLakeResource) -> list[dict]:
     client = TestClient(create_app(lake.store))
     response = client.get("/v1/boxes", params={"release": "draft", "limit": 10_000})
     assert response.status_code == 200, response.text
-    return sorted(
-        (
-            {key: value for key, value in row.items() if key != "changed_at"}
-            for row in response.json()["rows"]
-        ),
-        key=lambda row: row["box_id"],
-    )
+    return sorted(response.json()["rows"], key=lambda row: row["box_id"])
 
 
 def _upload_tree(source: Path, target: UPath) -> None:
@@ -177,7 +172,7 @@ def test_silver_sends_triton_presigned_urls_on_s3(
     """Triton holds no credentials, so a URL from silver must open as it is."""
     embedder = FakeEmbedder()
     monkeypatch.setattr(
-        target=silver_defs, name="TritonEmbedder", value=lambda url: embedder
+        target=embeddings_defs, name="TritonEmbedder", value=lambda url: embedder
     )
     prefix = uuid.uuid4().hex
     lake = CvLakeResource(
@@ -194,7 +189,13 @@ def test_silver_sends_triton_presigned_urls_on_s3(
         _upload_tree(source=Path(str(bronze_sources[name])), target=copy_dir)
     materialize_bronze_links(lake=lake, sources=copies)
 
-    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("wider_face")])
+    materialize_assets(
+        lake=lake,
+        assets=[
+            silver_defs.build_silver_asset("wider_face"),
+            embeddings_defs.build_embeddings_asset("wider_face"),
+        ],
+    )
 
     urls = [*embedder.paths, *(crop.path for crop in embedder.crops)]
     assert embedder.paths and embedder.crops

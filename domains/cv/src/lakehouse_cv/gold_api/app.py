@@ -11,13 +11,15 @@ authenticates, so keep it on a private network.
 Every request reads `_gold.json` again, so a gold build shows up with no restart.
 """
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Query, Response
+from pydantic import BaseModel
 
 from lakehouse_core.lake_store import LakeStore
 from lakehouse_cv.contract.class_registry import CanonicalClass
-from lakehouse_cv.contract.manifests import GoldManifest, ReleaseManifest
+from lakehouse_cv.contract.manifests import GoldDataset, GoldManifest, ReleaseManifest
 from lakehouse_cv.gold_api.arrow_responses import build_rows_response
 from lakehouse_cv.gold_api.gold_queries import (
     GoldTable,
@@ -36,8 +38,23 @@ from lakehouse_cv.transforms.gold_release import (
     list_release_numbers,
     read_release_manifest,
 )
+from lakehouse_cv.transforms.layer_builds import read_embeddings_manifest
 
 VECTOR_TABLES = (GoldTable.EMBEDDINGS, GoldTable.CROP_EMBEDDINGS)
+
+
+class ServedDataset(GoldDataset):
+    # The model of the vectors that the API serves, or None when it serves none.
+    embedding_model: str | None
+
+
+class ServedManifest(BaseModel):
+    """The gold manifest, with the model of the vectors of each dataset."""
+
+    build_id: str
+    built_at: datetime
+    code_version: str
+    datasets: list[ServedDataset]
 
 
 def create_app_from_env() -> FastAPI:
@@ -111,8 +128,22 @@ def create_app(store: LakeStore) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/v1/meta")
-    def read_meta() -> GoldManifest:
-        return read_current_manifest()
+    def read_meta() -> ServedManifest:
+        manifest = read_current_manifest()
+        return ServedManifest(
+            **manifest.model_dump(exclude={"datasets"}),
+            datasets=[
+                ServedDataset(
+                    **dataset.model_dump(),
+                    embedding_model=_read_embedding_model(dataset.dataset),
+                )
+                for dataset in manifest.datasets
+            ],
+        )
+
+    def _read_embedding_model(name: str) -> str | None:
+        embeddings = read_embeddings_manifest(paths=paths, name=name)
+        return None if embeddings is None else embeddings.embedding_model
 
     @app.get("/v1/releases")
     def list_releases() -> list[ReleaseManifest]:
