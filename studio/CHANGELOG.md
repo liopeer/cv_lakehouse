@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.4.0...studio-v0.4.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **studio:** keep the box merge fast on the first sync of a split ([#63](https://github.com/liopeer/cv_lakehouse/issues/63)) ([65e524d](https://github.com/liopeer/cv_lakehouse/commit/65e524d4f3c3d5def2e1ac014e57fd3837cc13ef))
+
 ## [0.4.0](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.3.0...studio-v0.4.0) (2026-10-08)
 
 
