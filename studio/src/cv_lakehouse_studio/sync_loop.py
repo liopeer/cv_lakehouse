@@ -24,7 +24,12 @@ from cv_lakehouse_studio.studio_datasets import (
     read_or_plan_studio_datasets,
 )
 from cv_lakehouse_studio.studio_settings import StudioSettings
-from cv_lakehouse_studio.sync import SyncReport, read_synced_gold, sync_dataset
+from cv_lakehouse_studio.sync import (
+    DEFAULT_STATEMENT_TIMEOUT_SECONDS,
+    SyncReport,
+    read_synced_gold,
+    sync_dataset,
+)
 from cv_lakehouse_studio.sync_state import create_sync_schema
 
 logger = logging.getLogger(__name__)
@@ -59,6 +64,7 @@ def sync_every_dataset(
     client: GoldClient,
     image_base: str,
     max_images: int = DEFAULT_MAX_IMAGES_PER_DATASET,
+    statement_timeout_seconds: float = DEFAULT_STATEMENT_TIMEOUT_SECONDS,
 ) -> list[SyncReport]:
     """Sync each Studio dataset whose gold changed since its last sync.
 
@@ -86,6 +92,7 @@ def sync_every_dataset(
                 studio_dataset=studio_dataset,
                 class_names=class_names,
                 image_base=image_base,
+                statement_timeout_seconds=statement_timeout_seconds,
             )
             logger.info(f"Synced {report}")
             reports.append(report)
@@ -112,6 +119,7 @@ def run_sync_loop(settings: StudioSettings, sync_lock: threading.Lock) -> None:
                     client=client,
                     image_base=settings.image_base,
                     max_images=settings.max_images_per_dataset,
+                    statement_timeout_seconds=settings.statement_timeout_seconds,
                 )
         except Exception:
             # A failed run changes nothing, and the next run starts from gold again.

@@ -8,6 +8,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from cv_lakehouse_studio.studio_datasets import DEFAULT_MAX_IMAGES_PER_DATASET
+from cv_lakehouse_studio.sync import DEFAULT_STATEMENT_TIMEOUT_SECONDS
 
 
 class StudioSettings(BaseSettings):
@@ -31,6 +32,10 @@ class StudioSettings(BaseSettings):
     # LightlyStudio holds about 1M images per dataset. A larger gold dataset is split.
     max_images_per_dataset: int = Field(default=DEFAULT_MAX_IMAGES_PER_DATASET, gt=0)
     request_timeout_seconds: float = Field(default=300.0, gt=0)
+    # A sync statement that runs longer fails the run, and the next run tries again.
+    statement_timeout_seconds: float = Field(
+        default=DEFAULT_STATEMENT_TIMEOUT_SECONDS, gt=0
+    )
     # The gold API rejects a page of more than 100000 rows. An embedding row holds a
     # vector. A large page of embeddings runs the gold API out of memory.
     rows_per_page: int = Field(default=50_000, gt=0, le=100_000)
