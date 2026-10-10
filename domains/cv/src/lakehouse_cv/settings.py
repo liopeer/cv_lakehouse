@@ -25,8 +25,7 @@ class CvSettings(LakeSettings):
     )
 
     # `host:port` of the MobileCLIP gRPC server in `triton/`, such as localhost:8011.
-    # Unset means silver writes no embedding, which is what lets a machine with no
-    # server still build the layer.
+    # Unset fails the embeddings assets. Silver and gold build without it.
     triton_url: str | None = None
     # The export of `studio/`, such as http://studio-sync:8002. Unset means that the
     # corrections assets fetch nothing, so a lake with no LightlyStudio still builds.
@@ -38,6 +37,9 @@ class CvLakePaths(LakePaths):
 
     def corrections_dir(self, name: str) -> UPath:
         return self.root / "bronze" / f"{name}_corrections"
+
+    def embeddings_dir(self, name: str) -> UPath:
+        return self.root / "silver" / f"{name}_embeddings"
 
     def gold_version_dir(self, version: int) -> UPath:
         return self.gold_dir() / "versions" / str(version)

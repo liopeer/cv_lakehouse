@@ -31,7 +31,11 @@ from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.correction_overlay import Correction, CorrectionOverlay
 from lakehouse_cv.transforms.gold_build import build_gold_version
 from tests.export_fakes import EXPORT_URL, FakeExportServer
-from tests.lake_runs import materialize_assets, materialize_bronze_links
+from tests.lake_runs import (
+    find_silver_files,
+    materialize_assets,
+    materialize_bronze_links,
+)
 
 DATASET = "wider_face"
 PARADE = "0--Parade/a.jpg"
@@ -97,7 +101,7 @@ def _build_silver(
 
 def _read_train_boxes(lake: CvLakeResource) -> dict[str, dict]:
     table = pq.read_table(
-        boxes_file(silver_dir=lake.paths.silver_dir(DATASET), split="train")
+        boxes_file(build_dir=find_silver_files(lake=lake, name=DATASET), split="train")
     )
     assert table.schema == BOX_SCHEMA
     return {row["box_id"]: row for row in table.to_pylist()}

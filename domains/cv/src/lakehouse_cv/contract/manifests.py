@@ -9,12 +9,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import BaseModel, Field
+from upath import UPath
 
 from lakehouse_core.bronze_manifest import BronzeManifest
 from lakehouse_core.published_files import PublishedFile
 from lakehouse_cv.contract.split_roles import SplitRole
 
 SILVER_MANIFEST = "_silver.json"
+EMBEDDINGS_MANIFEST = "_embeddings.json"
 GOLD_MANIFEST = "_gold.json"
 CORRECTIONS_MANIFEST = "_corrections.json"
 RELEASE_MANIFEST = "_release.json"
@@ -50,7 +52,22 @@ class CorrectionsManifest(BaseModel):
     snapshots: list[CorrectionSnapshot] = Field(default_factory=list)
 
 
-class SilverManifest(BaseModel):
+def builds_dir(layer_dir: UPath) -> UPath:
+    return layer_dir / "builds"
+
+
+def build_dir(*, layer_dir: UPath, build_id: str) -> UPath:
+    return builds_dir(layer_dir) / build_id
+
+
+class BuildManifest(BaseModel):
+    """The manifest of a layer that writes each run to a new directory."""
+
+    # The directory under `builds/` that holds the files of this run.
+    build_id: str
+
+
+class SilverManifest(BuildManifest):
     """One normalized dataset.
 
     A manifest describes the layer, and does not report on the data in it. Anything
@@ -66,10 +83,20 @@ class SilverManifest(BaseModel):
     # Keyed by the source's own split names, which are also the Parquet file stems.
     image_roots: dict[str, str]
     splits: list[str]
-    # The model behind the embedding files, or None when the run wrote none.
-    embedding_model: str | None = None
     # The correction snapshot that this silver applied, or None for the bare source.
     correction_snapshot_id: str | None = None
+
+
+class EmbeddingsManifest(BuildManifest):
+    """The vectors of one silver build: one per image, and one per box crop."""
+
+    dataset: str
+    code_version: str
+    embedding_model: str
+    embedding_version: str
+    # The silver build whose rows the vectors cover.
+    silver_build_id: str
+    splits: list[str]
 
 
 class GoldSplit(BaseModel):
@@ -84,8 +111,7 @@ class GoldDataset(BaseModel):
     license: str
     commercial_use: bool
     silver_code_version: str
-    # Gold copies no vector. A reader takes them from the silver files of this dataset.
-    embedding_model: str | None
+    silver_build_id: str
     # The correction snapshot that the silver of this dataset applied.
     correction_snapshot_id: str | None = None
     splits: list[GoldSplit]

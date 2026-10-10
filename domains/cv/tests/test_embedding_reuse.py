@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""A silver rebuild embeds only what no earlier run embedded with the same model."""
+"""An embeddings run embeds only what no earlier run embedded with the same model."""
 
 from collections.abc import Sequence
 from pathlib import Path
@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from numpy.typing import NDArray
 
+from lakehouse_core.lake_files import remove_tree
 from lakehouse_cv.contract.box_identity import derive_box_id
 from lakehouse_cv.contract.correction_actions import CorrectionAction
 from lakehouse_cv.contract.silver_tables import (
@@ -24,11 +25,17 @@ from lakehouse_cv.contract.silver_tables import (
 )
 from lakehouse_cv.defs import corrections as corrections_defs
 from lakehouse_cv.defs import silver as silver_defs
+from lakehouse_cv.defs import silver_embeddings as embeddings_defs
 from lakehouse_cv.defs.corrections import build_corrections_asset
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.transforms.embeddings import EMBEDDING_DIMENSION, Crop, Embedder
 from tests.export_fakes import EXPORT_URL, FakeExportServer
-from tests.lake_runs import materialize_assets, materialize_bronze_links
+from tests.lake_runs import (
+    find_embedding_files,
+    find_silver_files,
+    materialize_assets,
+    materialize_bronze_links,
+)
 
 DATASET = "wider_face"
 PARADE = "0--Parade/a.jpg"
@@ -73,7 +80,6 @@ class _Lake:
         self.resource = resource
         self.server = server
         self.embedder = ContentEmbedder()
-        self.silver_dir = resource.paths.silver_dir(DATASET)
 
     def build_silver(self, rows: list[dict] | None = None) -> None:
         """Publish the rows as a snapshot, if any, and rebuild silver."""
@@ -85,12 +91,16 @@ class _Lake:
             assets=[
                 build_corrections_asset(DATASET),
                 silver_defs.build_silver_asset(DATASET),
+                embeddings_defs.build_embeddings_asset(DATASET),
             ],
         )
 
     def read_crop_vectors(self) -> dict[str, list[float]]:
         table = pq.read_table(
-            crop_embeddings_file(silver_dir=self.silver_dir, split="train")
+            crop_embeddings_file(
+                build_dir=find_embedding_files(lake=self.resource, name=DATASET),
+                split="train",
+            )
         )
         assert table.schema == CROP_EMBEDDING_SCHEMA
         return dict(
@@ -103,7 +113,10 @@ class _Lake:
 
     def read_image_vectors(self) -> pa.Table:
         table = pq.read_table(
-            embeddings_file(silver_dir=self.silver_dir, split="train")
+            embeddings_file(
+                build_dir=find_embedding_files(lake=self.resource, name=DATASET),
+                split="train",
+            )
         )
         assert table.schema == EMBEDDING_SCHEMA
         return table
@@ -130,7 +143,9 @@ def reuse_lake(
         value=lambda timeout: server.client(),
     )
     monkeypatch.setattr(
-        target=silver_defs, name="TritonEmbedder", value=lambda url: reuse_lake.embedder
+        target=embeddings_defs,
+        name="TritonEmbedder",
+        value=lambda url: reuse_lake.embedder,
     )
     materialize_bronze_links(lake=resource, sources=bronze_sources)
     reuse_lake.build_silver()
@@ -226,7 +241,12 @@ def test_a_drawn_box_is_embedded_and_a_deleted_box_loses_its_row(
     vectors = reuse_lake.read_crop_vectors()
     assert DRAWN in vectors and FACE not in vectors
     # One row per box, in the order of the id.
-    boxes = pq.read_table(boxes_file(silver_dir=reuse_lake.silver_dir, split="train"))
+    boxes = pq.read_table(
+        boxes_file(
+            build_dir=find_silver_files(lake=reuse_lake.resource, name=DATASET),
+            split="train",
+        )
+    )
     assert list(vectors) == sorted(boxes.column("box_id").to_pylist())
 
 
@@ -247,5 +267,32 @@ def test_a_rebuild_on_new_code_reuses_every_vector(
 
 def test_a_rebuild_leaves_no_working_file_behind(reuse_lake: _Lake) -> None:
     reuse_lake.build_silver()
-    names = {path.name for path in reuse_lake.silver_dir.rglob("*") if path.is_file()}
-    assert names == {"_silver.json", "train.parquet", "val.parquet"}
+    embeddings_dir = reuse_lake.resource.paths.embeddings_dir(DATASET)
+    names = {
+        path.relative_to(embeddings_dir).parts[0]
+        for path in embeddings_dir.rglob("*")
+        if path.is_file()
+    }
+    assert names == {"_embeddings.json", "builds"}
+    current = find_embedding_files(lake=reuse_lake.resource, name=DATASET)
+    assert {path.name for path in current.rglob("*") if path.is_file()} == {
+        "train.parquet",
+        "val.parquet",
+    }
+
+
+def test_the_vectors_that_silver_kept_before_this_asset_are_reused(
+    reuse_lake: _Lake,
+) -> None:
+    """A lake of the layout before keeps its vectors beside silver."""
+    crops = reuse_lake.read_crop_vectors()
+    current = find_embedding_files(lake=reuse_lake.resource, name=DATASET)
+    legacy_dir = reuse_lake.resource.paths.silver_dir(DATASET)
+    for table in ("embeddings", "crop_embeddings"):
+        (current / table).rename(legacy_dir / table)
+    remove_tree(reuse_lake.resource.paths.embeddings_dir(DATASET))
+
+    reuse_lake.build_silver()
+
+    assert (reuse_lake.embedder.paths, reuse_lake.embedder.crops) == ([], [])
+    assert reuse_lake.read_crop_vectors() == crops

@@ -41,7 +41,6 @@ from lakehouse_cv.contract.manifests import (
     GoldDataset,
     GoldManifest,
     GoldSplit,
-    SilverManifest,
 )
 from lakehouse_cv.contract.silver_tables import (
     ROWS_PER_ROW_GROUP,
@@ -49,6 +48,7 @@ from lakehouse_cv.contract.silver_tables import (
     images_file,
 )
 from lakehouse_cv.settings import CvLakePaths
+from lakehouse_cv.transforms.layer_builds import read_silver_manifest, silver_build_dir
 
 # The current version and the one before it. A reader that opened the manifest just
 # before a build still finds its files.
@@ -116,13 +116,11 @@ def build_gold_version(
         # A timestamp then reaches Arrow in UTC, whatever the machine is set to.
         connection.execute("set TimeZone = 'UTC'")
         for spec in specs:
-            silver_dir = paths.silver_dir(spec.name)
-            if not (silver_dir / SILVER_MANIFEST).exists():
+            if not (paths.silver_dir(spec.name) / SILVER_MANIFEST).exists():
                 skipped.append(spec.name)
                 continue
-            silver = read_manifest(
-                path=silver_dir / SILVER_MANIFEST, model=SilverManifest
-            )
+            silver = read_silver_manifest(paths=paths, name=spec.name)
+            silver_dir = silver_build_dir(paths=paths, manifest=silver)
             splits: list[GoldSplit] = []
             for split in silver.splits:
                 gold_split = GoldSplit(
@@ -141,7 +139,7 @@ def build_gold_version(
                     rows=_IMAGE_ROWS,
                     parameters={
                         **constants,
-                        "silver": str(images_file(silver_dir=silver_dir, split=split)),
+                        "silver": str(images_file(build_dir=silver_dir, split=split)),
                         "image_root": gold_split.image_root,
                         "license": silver.license,
                     },
@@ -163,7 +161,7 @@ def build_gold_version(
                     rows=_BOX_ROWS,
                     parameters={
                         **constants,
-                        "silver": str(boxes_file(silver_dir=silver_dir, split=split)),
+                        "silver": str(boxes_file(build_dir=silver_dir, split=split)),
                     },
                     schema=GOLD_BOX_SCHEMA,
                     key="box_id",
@@ -184,7 +182,7 @@ def build_gold_version(
                     license=silver.license,
                     commercial_use=silver.commercial_use,
                     silver_code_version=silver.code_version,
-                    embedding_model=silver.embedding_model,
+                    silver_build_id=silver.build_id,
                     correction_snapshot_id=silver.correction_snapshot_id,
                     splits=splits,
                 )

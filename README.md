@@ -55,7 +55,7 @@ engines on the first start. See [triton/README.md](triton/README.md).
 | Layer | What it is | How it materializes |
 | --- | --- | --- |
 | bronze | the raw dataset, complete, as published | download it, or link a complete copy |
-| silver | one dataset, normalised | four Parquet files per split, on the class registry |
+| silver | one dataset, normalised | two Parquet files per split, on the class registry, and two of vectors |
 | gold | every dataset in one table set | two Parquet files per dataset and split, with a role |
 
 Bronze holds every file that a dataset publishes, byte for byte, in the layout of a
@@ -76,10 +76,15 @@ Silver now writes one row per image and one row per box, so a box carries its gr
 flags and the class name its source used. The layer is queryable with no code of ours:
 
 ```bash
+build=$(jq -r .build_id "$CV_LAKEHOUSE_ROOT/silver/wider_face/_silver.json")
 duckdb -c "select class_name, count(*), avg(w * h)
-           from read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/boxes/*.parquet')
+           from read_parquet('$CV_LAKEHOUSE_ROOT/silver/wider_face/builds/$build/boxes/*.parquet')
            group by 1"
 ```
+
+A run writes a new build under `builds/`, checks every box, and only then replaces
+`_silver.json`, which names the build. A run that fails leaves the last good build in
+place. Silver keeps the current build and the one before it.
 
 Every dataset writes the same columns and leaves the ones it knows nothing about null, so
 a scan across datasets needs no `union_by_name`. An `attr_*` column holds a per box
@@ -139,26 +144,16 @@ run logs it under `dropped_reasons`.
 
 ### Embeddings
 
-Silver also embeds, in the same run that normalises. Every image gets one MobileCLIP-S0
-vector, and so does every box, cropped to its own pixels. The vectors are 512 float32 and
-L2 normalised, so a cosine similarity is a dot product.
+The asset `silver/<dataset>_embeddings` embeds the current silver build. Every image gets
+one MobileCLIP-S0 vector, and so does every box, cropped to its own pixels. The vectors
+are 512 float32 and L2 normalised, so a cosine similarity is a dot product.
 
-They are separate files because a vector is 2 KB next to a box row of a few dozen bytes,
-and most queries over silver want the boxes. The keys are the keys of the other two
-files, so a join needs nothing else. A file is sorted by `image_id` or `box_id`, so a
-query on a few ids reads a few row groups:
-
-```bash
-duckdb -c "select b.class_name, count(*)
-           from read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/boxes/*.parquet') b
-           join read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/crop_embeddings/*.parquet') e
-             using (box_id)
-           where list_dot_product(e.embedding, (
-                 select embedding
-                 from read_parquet('$CV_LAKEHOUSE_ROOT/silver/*/crop_embeddings/*.parquet')
-                 limit 1)) > 0.9
-           group by 1"
-```
+They are a separate asset because a vector is 2 KB next to a box row of a few dozen
+bytes, and most queries over silver want the boxes. Silver then means the same on a
+machine with no server. The keys are the keys of the silver files, so a join needs
+nothing else. A file is sorted by `image_id` or `box_id`, so a query on a few ids reads a
+few row groups. `_embeddings.json` names the current build, and the silver build that
+it covers.
 
 A [Triton](triton/README.md) server does the work. It is in `triton/`, it runs the two
 encoders as TensorRT engines, and it crops, resizes and normalises on the GPU, so this
@@ -169,36 +164,29 @@ it, and `triton/` builds the image.
 export CV_LAKEHOUSE_TRITON_URL=localhost:8011
 ```
 
-Silver reads the URL and skips the embedding when it is unset, so a machine with no
-server still builds the layer. The two counts land in the asset metadata either way.
+The embeddings asset fails when the URL is unset or the server does not answer. It
+never deletes a vector.
 
 The server resolves the path itself, so the stack mounts `$CV_LAKEHOUSE_ROOT` read only
 at the same path inside the container. If bronze links a copy outside the root, add a
 mount for that path to the compose file of the stack.
 
-A silver rebuild embeds only what has no vector yet, on any code. An image keeps its
-vector, because bronze pins the pixels. A box keeps its vector while its crop on the
-pixel grid is the same, so a relabelled box is not embedded again, and a moved or a
-drawn box is. The run metadata counts the vectors it reused.
+A run embeds only what has no vector yet, on any code. An image keeps its vector,
+because bronze pins the pixels. A box keeps its vector while its crop on the pixel grid
+is the same, so a relabelled box is not embedded again, and a moved or a drawn box is.
+The run metadata counts the vectors it reused.
 
 The footer of an embedding file names the model and `EMBEDDING_VERSION`. A file of
 another model or version is embedded again. A new model behind the same name is not
 detected: bump `EMBEDDING_VERSION`. See
 [ADR 0013](docs/adr/0013-silver-vectors-are-sorted-and-kept.md).
 
-A run writes new vectors to closed parts of 65536 vectors, beside the file. If a run
+A run writes new vectors to closed parts of 65536 vectors, under `parts/`. If a run
 stops, the next run reuses every closed part. The run log reports the progress of each
 step once a minute, with the rate and the time left.
 
-A file that silver wrote before ADR 0013 has no id column and no footer. Move it to the
-new layout once, with no new embedding:
-
-```bash
-python -m lakehouse_cv.maintenance.sort_silver_embeddings [DATASET ...]
-```
-
-The command reads the lake from the same variables as the code location. It skips a
-file of the new layout, so it can run again after it stops.
+Before this asset, silver kept the vectors in `silver/<dataset>/embeddings/` and
+`crop_embeddings/`. The first run of the asset reuses them. Delete them after that run.
 
 ### The class registry
 
@@ -359,8 +347,8 @@ export CV_LAKEHOUSE_DUCKDB_THREADS=4
 export CV_LAKEHOUSE_DUCKDB_MEMORY_LIMIT=2GB
 ```
 
-Every layer runs on any root. On a local root, silver sends Triton image paths, and the
-container mounts the lake. On an object store, silver sends presigned URLs, valid for an
+Every layer runs on any root. On a local root, the embeddings send Triton image paths, and
+the container mounts the lake. On an object store, they send presigned URLs, valid for an
 hour, so Triton needs no mount and no credentials. That needs Triton 0.3.0 or newer.
 
 Bronze stages nothing on local disk. On S3 a download is a multipart upload, and a run
@@ -390,10 +378,14 @@ $CV_LAKEHOUSE_ROOT/
     _corrections.json            every snapshot, with its checksum
     snapshots/<id>/corrections.parquet   one immutable snapshot
   silver/<dataset>/
-    images/<split>.parquet           one row per image
-    boxes/<split>.parquet            one row per box, XYWH pixels, exact floats
-    embeddings/<split>.parquet       one MobileCLIP vector per image, by image_id
-    crop_embeddings/<split>.parquet  one MobileCLIP vector per box crop, by box_id
+    _silver.json                     the current build
+    builds/<id>/images/<split>.parquet   one row per image
+    builds/<id>/boxes/<split>.parquet    one row per box, XYWH pixels, exact floats
+  silver/<dataset>_embeddings/
+    _embeddings.json                 the current build, and the silver build it covers
+    builds/<id>/embeddings/<split>.parquet       one vector per image, by image_id
+    builds/<id>/crop_embeddings/<split>.parquet  one vector per box crop, by box_id
+    parts/                           the vectors of a run that stopped
   gold/
     _gold.json                       the current version, and its datasets
     versions/<n>/images/<dataset>/<split>.parquet   one row per image

@@ -17,7 +17,9 @@ from lakehouse_cv.contract.gold_tables import (
     GOLD_BOX_SCHEMA,
     GOLD_CROP_EMBEDDING_SCHEMA,
 )
+from lakehouse_cv.contract.silver_tables import boxes_file
 from lakehouse_cv.defs import silver as silver_defs
+from lakehouse_cv.defs import silver_embeddings as embeddings_defs
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.gold_api.app import create_app
 from lakehouse_cv.gold_api.arrow_responses import (
@@ -27,7 +29,12 @@ from lakehouse_cv.gold_api.arrow_responses import (
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.embeddings import EMBEDDING_DIMENSION
 from lakehouse_cv.transforms.gold_build import build_gold_version
-from tests.lake_runs import DATASETS, materialize_assets, materialize_bronze_links
+from tests.lake_runs import (
+    DATASETS,
+    find_silver_files,
+    materialize_assets,
+    materialize_bronze_links,
+)
 
 SPECS = [source.spec for source in SOURCE_BY_NAME.values()]
 FIRST_BUILD = datetime(2026, 1, 1, tzinfo=UTC)
@@ -41,7 +48,10 @@ def client(
     materialize_bronze_links(lake=embedding_lake, sources=bronze_sources)
     materialize_assets(
         lake=embedding_lake,
-        assets=[silver_defs.build_silver_asset(name) for name in DATASETS],
+        assets=[
+            *(silver_defs.build_silver_asset(name) for name in DATASETS),
+            *(embeddings_defs.build_embeddings_asset(name) for name in DATASETS),
+        ],
     )
     build_gold_version(
         store=embedding_lake.store,
@@ -164,7 +174,9 @@ def test_a_box_with_no_vector_does_not_end_the_paging(
     """A page of vectors can be short, so its cursor comes from the page of ids."""
     boxes = [row["box_id"] for row in _rows(client=client, path="/v1/boxes")]
     first = min(boxes)
-    for path in embedding_lake.store.root.glob("silver/*/crop_embeddings/*.parquet"):
+    for path in embedding_lake.store.root.glob(
+        "silver/*_embeddings/builds/*/crop_embeddings/*.parquet"
+    ):
         table = pq.read_table(path)
         kept = [box_id != first for box_id in table.column("box_id").to_pylist()]
         pq.write_table(table.filter(pa.array(kept)), path)
@@ -181,6 +193,38 @@ def test_a_box_with_no_vector_does_not_end_the_paging(
         if after is None:
             break
     assert seen == sorted(set(boxes) - {first})
+
+
+def test_a_box_that_moved_after_its_vector_gets_none(
+    client: TestClient, embedding_lake: CvLakeResource
+) -> None:
+    """Silver moved on, and the embeddings did not run yet."""
+    path = boxes_file(
+        build_dir=find_silver_files(lake=embedding_lake, name="wider_face"),
+        split="val",
+    )
+    table = pq.read_table(path)
+    (moved,) = table.column("box_id").to_pylist()
+    pq.write_table(
+        table.set_column(
+            table.schema.get_field_index("x"),
+            table.schema.field("x"),
+            pa.array([1.0], type=pa.float64()),
+        ),
+        path,
+    )
+    build_gold_version(
+        store=embedding_lake.store,
+        paths=embedding_lake.paths,
+        specs=SPECS,
+        code_version="test",
+        built_at=FIRST_BUILD,
+    )
+
+    crops = _rows(client=client, path="/v1/crop_embeddings", dataset="wider_face")
+
+    assert moved not in {row["box_id"] for row in crops}
+    assert len(crops) == 1
 
 
 def test_crop_embeddings_filter_by_class(client: TestClient) -> None:

@@ -29,7 +29,12 @@ from lakehouse_cv.transforms.gold_release import (
     read_release_manifest,
     write_eval_release,
 )
-from tests.lake_runs import DATASETS, materialize_assets, materialize_bronze_links
+from tests.lake_runs import (
+    DATASETS,
+    find_silver_files,
+    materialize_assets,
+    materialize_bronze_links,
+)
 
 SPECS = [source.spec for source in SOURCE_BY_NAME.values()]
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -57,7 +62,9 @@ def _build_gold(lake: CvLakeResource) -> None:
 
 def _move_the_wider_face_val_box(lake: CvLakeResource) -> None:
     """Change one eval box in silver, as a correction does, and rebuild gold."""
-    path = boxes_file(silver_dir=lake.paths.silver_dir("wider_face"), split="val")
+    path = boxes_file(
+        build_dir=find_silver_files(lake=lake, name="wider_face"), split="val"
+    )
     table = pq.read_table(path)
     moved = table.set_column(
         table.schema.get_field_index("x"),

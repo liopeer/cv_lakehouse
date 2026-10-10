@@ -13,6 +13,12 @@ from upath import UPath
 from lakehouse_core.bronze_asset import build_bronze_asset
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
+from lakehouse_cv.transforms.layer_builds import (
+    embeddings_build_dir,
+    read_embeddings_manifest,
+    read_silver_manifest,
+    silver_build_dir,
+)
 
 DATASETS = ("open_images", "wider_face", "pp4av")
 
@@ -39,3 +45,16 @@ def materialize_assets(
     result = dg.materialize(assets=assets, resources={"lake": lake})
     assert result.success
     return result
+
+
+def find_silver_files(lake: CvLakeResource, name: str) -> UPath:
+    """Return the directory of the silver build that the manifest names."""
+    return silver_build_dir(
+        paths=lake.paths, manifest=read_silver_manifest(paths=lake.paths, name=name)
+    )
+
+
+def find_embedding_files(lake: CvLakeResource, name: str) -> UPath:
+    manifest = read_embeddings_manifest(paths=lake.paths, name=name)
+    assert manifest is not None
+    return embeddings_build_dir(paths=lake.paths, manifest=manifest)

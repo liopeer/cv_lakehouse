@@ -8,8 +8,10 @@ The manifest names the role of every file, so a filter on the dataset, the split
 the role selects files and never opens the others. Every value that a caller sends is
 a bound parameter.
 
-A page of vectors selects its ids from gold first, and then reads their vectors. Silver
-sorts the vectors by the id, so DuckDB reads only the row groups of the page.
+A page of vectors selects its ids from gold first, and then reads their vectors. The
+embeddings assets sort the vectors by the id, so DuckDB reads only the row groups of the
+page. A crop vector serves a gold box only when its crop is the crop of that box, so a
+box that moved after its vector was made gets none.
 """
 
 from __future__ import annotations
@@ -37,9 +39,18 @@ from lakehouse_cv.contract.manifests import (
     GoldSplit,
     ReleaseManifest,
 )
-from lakehouse_cv.contract.silver_tables import crop_embeddings_file, embeddings_file
 from lakehouse_cv.gold_api.row_filters import BoxFilter, ImageFilter, ImageSelection
 from lakehouse_cv.settings import CvLakePaths
+from lakehouse_cv.transforms.embedding_files import (
+    CROP_SQL,
+    CROP_VECTORS,
+    IMAGE_VECTORS,
+    VectorTable,
+)
+from lakehouse_cv.transforms.layer_builds import (
+    embeddings_build_dir,
+    read_embeddings_manifest,
+)
 
 
 class GoldTable(StrEnum):
@@ -55,8 +66,14 @@ class _TableLayout:
     key: str
     # Whether the gold rows are the boxes. Otherwise they are the images.
     reads_boxes: bool
-    # Whether the rows are the silver vectors of the gold ids.
-    reads_vectors: bool = False
+    # The vectors of the gold rows, or None for the gold rows themselves.
+    vectors: VectorTable | None = None
+    # The columns beyond the key that a vector matches, from a gold row.
+    match_sql: str | None = None
+
+    @property
+    def reads_vectors(self) -> bool:
+        return self.vectors is not None
 
 
 _LAYOUTS = {
@@ -70,13 +87,14 @@ _LAYOUTS = {
         schema=GOLD_EMBEDDING_SCHEMA,
         key="image_id",
         reads_boxes=False,
-        reads_vectors=True,
+        vectors=IMAGE_VECTORS,
     ),
     GoldTable.CROP_EMBEDDINGS: _TableLayout(
         schema=GOLD_CROP_EMBEDDING_SCHEMA,
         key="box_id",
         reads_boxes=True,
-        reads_vectors=True,
+        vectors=CROP_VECTORS,
+        match_sql=CROP_SQL,
     ),
 }
 
@@ -124,7 +142,13 @@ def read_gold_page(
         conditions.append("list_contains($class_names, g.class_name)")
         parameters["class_names"] = row_filter.class_name
     where = f"where {' and '.join(conditions)}" if conditions else ""
-    selected = f"g.{layout.key}" if layout.reads_vectors else "g.*"
+    selected = (
+        "g.*"
+        if not layout.reads_vectors
+        else ", ".join(
+            [f"g.{layout.key}", *([layout.match_sql] if layout.match_sql else [])]
+        )
+    )
     query = f"""
     select {selected}
     from read_parquet($gold) g
@@ -143,10 +167,10 @@ def read_gold_page(
             if rows.num_rows == row_filter.limit
             else None
         )
-        if layout.reads_vectors:
+        if layout.vectors is not None:
             rows = _read_vectors(
                 connection=connection,
-                key=layout.key,
+                vectors=layout.vectors,
                 page=rows,
                 embedding_files=embedding_files,
             )
@@ -156,16 +180,17 @@ def read_gold_page(
 def _read_vectors(
     *,
     connection: duckdb.DuckDBPyConnection,
-    key: str,
+    vectors: VectorTable,
     page: pa.Table,
     embedding_files: list[str],
 ) -> pa.Table:
     connection.register(view_name="page", python_object=page)
+    key = vectors.key
     return connection.execute(
         query=f"""
         select page.{key}, e.embedding
         from page
-        join read_parquet($embeddings) e using ({key})
+        join read_parquet($embeddings) e using ({", ".join(vectors.match_columns)})
         order by page.{key}
         """,
         parameters={"embeddings": embedding_files},
@@ -229,9 +254,8 @@ def _select_files(
     layout: _TableLayout,
     row_filter: ImageSelection,
 ) -> tuple[list[str], list[str]]:
-    """Return the gold files and the silver embedding files of the selected splits."""
+    """Return the gold files and the embedding files of the selected splits."""
     gold_file = gold_boxes_file if layout.reads_boxes else gold_images_file
-    embedding_file = crop_embeddings_file if layout.reads_boxes else embeddings_file
     gold_files: list[UPath] = []
     embedding_files: list[UPath] = []
     for directory, dataset, split in _iter_splits(
@@ -246,10 +270,14 @@ def _select_files(
         gold_files.append(
             gold_file(version_dir=directory, dataset=dataset.dataset, split=split.split)
         )
-        if dataset.embedding_model is not None:
+        if layout.vectors is None:
+            continue
+        embeddings = read_embeddings_manifest(paths=paths, name=dataset.dataset)
+        if embeddings is not None and split.split in embeddings.splits:
             embedding_files.append(
-                embedding_file(
-                    silver_dir=paths.silver_dir(dataset.dataset), split=split.split
+                layout.vectors.target_file(
+                    build_dir=embeddings_build_dir(paths=paths, manifest=embeddings),
+                    split=split.split,
                 )
             )
     return [str(path) for path in gold_files], [str(path) for path in embedding_files]

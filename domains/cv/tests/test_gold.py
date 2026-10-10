@@ -24,7 +24,12 @@ from lakehouse_cv.defs import silver as silver_defs
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.gold_build import build_gold_version, read_gold_manifest
-from tests.lake_runs import DATASETS, materialize_assets, materialize_bronze_links
+from tests.lake_runs import (
+    DATASETS,
+    find_silver_files,
+    materialize_assets,
+    materialize_bronze_links,
+)
 
 SPECS = [source.spec for source in SOURCE_BY_NAME.values()]
 FIRST_BUILD = datetime(2026, 1, 1, tzinfo=UTC)
@@ -146,7 +151,7 @@ def test_a_rebuild_with_no_change_keeps_changed_at(silver_lake: CvLakeResource) 
 def test_a_changed_box_gets_the_time_of_its_build(silver_lake: CvLakeResource) -> None:
     _build(lake=silver_lake, built_at=FIRST_BUILD)
     path = boxes_file(
-        silver_dir=silver_lake.paths.silver_dir("wider_face"), split="val"
+        build_dir=find_silver_files(lake=silver_lake, name="wider_face"), split="val"
     )
     table = pq.read_table(path)
     moved = table.set_column(

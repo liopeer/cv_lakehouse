@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from upath import UPath
 
-from lakehouse_cv.defs import silver as silver_defs
+from lakehouse_cv.defs import silver_embeddings as embeddings_defs
 from lakehouse_cv.defs.resources import CvLakeResource
 from tests.fakes import FakeEmbedder
 from tests.fixtures import make_all
@@ -26,7 +26,7 @@ def lake(tmp_path: Path) -> CvLakeResource:
 def embedding_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CvLakeResource:
     """A lake with a Triton server that is a fake, so no test needs a GPU."""
     monkeypatch.setattr(
-        target=silver_defs, name="TritonEmbedder", value=lambda url: FakeEmbedder()
+        target=embeddings_defs, name="TritonEmbedder", value=lambda url: FakeEmbedder()
     )
     return CvLakeResource(
         root=str(tmp_path / "lake"),
