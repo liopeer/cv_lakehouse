@@ -6,7 +6,6 @@
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 from hashlib import md5
 from uuid import UUID
 
@@ -14,6 +13,7 @@ import numpy as np
 import pyarrow as pa
 
 from cv_lakehouse_studio.gold_client import (
+    EventMarker,
     GoldClient,
     GoldDataset,
     GoldMeta,
@@ -24,7 +24,6 @@ from cv_lakehouse_studio.gold_client import (
 DATASET = "faces"
 CLASS_NAMES = ["face", "license_plate", "other"]
 EMBEDDING_DIMENSION = 4
-FIRST_BUILD = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def derive_id(key: str) -> str:
@@ -84,7 +83,8 @@ def make_box(
 class FakeGoldClient(GoldClient):
     """One dataset of two images. `a.jpg` holds the boxes, and `b.jpg` holds none.
 
-    A test edits `boxes` and calls `publish_new_version`, as a gold build does.
+    A test edits `boxes`, as a gold build does. `last_event` is the last edit that gold
+    holds.
     """
 
     boxes: list[dict] = field(default_factory=_make_default_boxes)
@@ -96,16 +96,13 @@ class FakeGoldClient(GoldClient):
     )
     # Images beyond `a.jpg` and `b.jpg`, such as for a test of shards.
     more_images: list[dict] = field(default_factory=list)
-    version: int = 1
-    requested_changed_since: list[datetime | None] = field(default_factory=list)
-
-    def publish_new_version(self) -> None:
-        self.version += 1
+    last_event: EventMarker | None = None
+    # The tables of every page that a sync asked for, in order.
+    requested_tables: list[str] = field(default_factory=list)
 
     def read_meta(self) -> GoldMeta:
         return GoldMeta(
-            version=self.version,
-            built_at=FIRST_BUILD + timedelta(days=self.version),
+            build_id="build",
             datasets=[
                 GoldDataset(
                     dataset=DATASET,
@@ -114,6 +111,7 @@ class FakeGoldClient(GoldClient):
                         GoldSplit(split="train", role="train"),
                         GoldSplit(split="validation", role="val"),
                     ],
+                    last_event=self.last_event,
                 )
             ],
         )
@@ -124,13 +122,8 @@ class FakeGoldClient(GoldClient):
     def count_images(self, gold_slice: GoldSlice) -> int:
         return len(self._select_images(gold_slice))
 
-    def iter_pages(
-        self,
-        *,
-        table: str,
-        gold_slice: GoldSlice,
-        changed_since: datetime | None = None,
-    ) -> Iterator[pa.Table]:
+    def iter_pages(self, *, table: str, gold_slice: GoldSlice) -> Iterator[pa.Table]:
+        self.requested_tables.append(table)
         images = self._select_images(gold_slice)
         image_ids = {image["image_id"] for image in images}
         boxes = [box for box in self.boxes if box["image_id"] in image_ids]
@@ -139,7 +132,6 @@ class FakeGoldClient(GoldClient):
         elif table == "boxes":
             yield pa.Table.from_pylist(boxes, schema=_BOX_SCHEMA)
         else:
-            self.requested_changed_since.append(changed_since)
             key = "image_id" if table == "embeddings" else "box_id"
             ids = (
                 [image["image_id"] for image in images]

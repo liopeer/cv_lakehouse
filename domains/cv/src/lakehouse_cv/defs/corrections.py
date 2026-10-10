@@ -13,15 +13,20 @@ download has none. The graph stays acyclic, although the corrections are made on
 
 import dagster as dg
 import httpx
+from upath import UPath
 
 from lakehouse_core.manifest_files import read_manifest, write_manifest
-from lakehouse_cv.contract.manifests import CORRECTIONS_MANIFEST, CorrectionsManifest
+from lakehouse_cv.contract.manifests import (
+    CORRECTIONS_MANIFEST,
+    CorrectionsManifest,
+    EventMarker,
+)
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.settings import CvLakePaths
-from lakehouse_cv.sources.correction_snapshots import fetch_new_snapshots
+from lakehouse_cv.sources.correction_events import fetch_new_event_files
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 
-NO_SNAPSHOT_DATA_VERSION = "none"
+NO_EVENT_DATA_VERSION = "none"
 
 
 def build_corrections_key(name: str) -> dg.AssetKey:
@@ -36,6 +41,23 @@ def read_corrections_manifest(paths: CvLakePaths, name: str) -> CorrectionsManif
     return read_manifest(path=path, model=CorrectionsManifest)
 
 
+def list_event_paths(
+    *, paths: CvLakePaths, manifest: CorrectionsManifest, last_event: EventMarker | None
+) -> list[UPath]:
+    """Return the event files in the order of bronze, up to the one of `last_event`."""
+    if last_event is None:
+        return []
+    files: list[UPath] = []
+    for event_file in manifest.event_files:
+        files.append(paths.corrections_dir(manifest.dataset) / event_file.file.path)
+        if (event_file.chain_id, event_file.last_log_sequence) == (
+            last_event.chain_id,
+            last_event.log_sequence,
+        ):
+            return files
+    raise ValueError(f"Bronze holds no event file that ends at {last_event}.")
+
+
 def open_export_client(timeout: float) -> httpx.Client:
     return httpx.Client(timeout=timeout, follow_redirects=True)
 
@@ -46,8 +68,8 @@ def build_corrections_asset(name: str) -> dg.AssetsDefinition:
         group_name="bronze",
         kinds={"file"},
         description=(
-            f"The corrections that curators made to {name} in LightlyStudio, as "
-            "immutable snapshots. Silver applies the latest one."
+            f"The edits that curators made to {name} in LightlyStudio, as immutable "
+            "event files. Silver folds every one of them."
         ),
     )
     def _corrections(
@@ -61,31 +83,34 @@ def build_corrections_asset(name: str) -> dg.AssetsDefinition:
             )
         else:
             with open_export_client(lake.request_timeout_seconds) as client:
-                manifest = CorrectionsManifest(
-                    dataset=name,
-                    snapshots=fetch_new_snapshots(
-                        client=client,
-                        export_url=lake.studio_export_url,
-                        dataset=name,
-                        corrections_dir=lake.paths.corrections_dir(name),
-                        stored_snapshots=manifest.snapshots,
-                        log=context.log,
-                    ),
+                manifest = manifest.model_copy(
+                    update={
+                        "event_files": fetch_new_event_files(
+                            client=client,
+                            export_url=lake.studio_export_url,
+                            dataset=name,
+                            corrections_dir=lake.paths.corrections_dir(name),
+                            stored_files=manifest.event_files,
+                            log=context.log,
+                        )
+                    }
                 )
         write_manifest(
             path=lake.paths.corrections_dir(name) / CORRECTIONS_MANIFEST,
             manifest=manifest,
         )
-        latest = manifest.snapshots[-1] if manifest.snapshots else None
+        latest = manifest.event_files[-1] if manifest.event_files else None
         return dg.MaterializeResult(
-            # Silver is stale when a new snapshot lands, and not on every run.
+            # Silver is stale when a new event file lands, and not on every run.
             data_version=dg.DataVersion(
-                NO_SNAPSHOT_DATA_VERSION if latest is None else latest.snapshot_id
+                NO_EVENT_DATA_VERSION if latest is None else latest.event_file_id
             ),
             metadata={
-                "num_snapshots": len(manifest.snapshots),
-                "latest_snapshot": "none" if latest is None else latest.snapshot_id,
-                "dagster/row_count": 0 if latest is None else latest.row_count,
+                "num_event_files": len(manifest.event_files),
+                "latest_event_file": "none" if latest is None else latest.event_file_id,
+                "dagster/row_count": sum(
+                    event_file.row_count for event_file in manifest.event_files
+                ),
             },
         )
 

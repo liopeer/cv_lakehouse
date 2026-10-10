@@ -12,7 +12,7 @@ Two images come from one Dockerfile:
 | Image | What it runs |
 | --- | --- |
 | `ghcr.io/liopeer/cv_lakehouse-studio` | the LightlyStudio server and GUI, on port 8001 |
-| `ghcr.io/liopeer/cv_lakehouse-studio-sync` | the sync from gold, and the export of the corrections, on port 8002 |
+| `ghcr.io/liopeer/cv_lakehouse-studio-sync` | the sync from gold, and the export of the curator edits, on port 8002 |
 
 | File | What it is |
 | --- | --- |
@@ -41,24 +41,27 @@ no code with `cv_lakehouse`.
 - The val and test rows are the draft of gold, not a frozen release, so a curator can
   fix them. The fix reaches the next release.
 
-A run does nothing for a dataset whose gold version it already loaded. For a new gold
-version it reads every image and box, and only the vectors that changed.
+Every run writes every image and every box of gold, and keeps no record of what it
+wrote. It updates a row in place by its id, so a run of the same gold changes nothing.
 
-The sync records every box as it last wrote it, in the table `lakehouse_sync.loaded_box`.
-That record decides who owns a box:
+The lake owns the annotations. A box that gold does not hold is deleted. The lake also
+owns the tags `role/` and `split/`. A tag that a curator adds or removes stays in
+LightlyStudio, and the lake never reads it.
 
-| LightlyStudio holds | Gold holds | The sync |
-| --- | --- | --- |
-| what the sync wrote | another value | updates the box |
-| what the sync wrote | no such box | deletes the box |
-| another value, or no box | anything | leaves it. A curator changed it |
-| no record | a new box | inserts the box |
+A curator's edit wins until gold holds it:
 
-So a curator's edit is never overwritten, and a box that a curator deleted never comes
-back.
+- Triggers log every write of a curator to a box, in `lakehouse_sync.edit_log`. The
+  sync marks its own writes with the setting `lakehouse.origin`, and the triggers skip
+  them.
+- `/v1/meta` names the last log entry that gold holds, for each dataset. The sync leaves
+  a box with a later entry: it neither updates nor deletes it, and gold does not bring
+  back a box that a curator deleted.
+- A trigger checks the same rule on every write of the sync, so an edit that lands
+  while the sync runs also stays.
+- Gold of another database holds no edit of this one.
 
-A box that a curator drew comes back from gold with `origin` set to `studio`. The sync
-skips it, so it stays the curator's.
+A box that a curator moves loses its vector, as the vector shows the old crop. The sync
+reads the vectors of a dataset only when a sample lacks one, and then writes every one.
 
 The LightlyStudio server owns the schema, and migrates it on start. The sync writes only
 while the database is at the migration that its own LightlyStudio build expects. Deploy
@@ -78,34 +81,30 @@ lakehouse dataset.
 
 ## The export
 
-The sync image also serves the corrections of the curators, for the lakehouse asset
-`bronze/<dataset>_corrections`.
+The sync image also serves the edits of the curators, for the lakehouse asset
+`bronze/<dataset>_corrections`. See
+[ADR 0014](../docs/adr/0014-curator-edits-are-bronze-events.md).
 
 | Endpoint | Answer |
 | --- | --- |
-| `GET /v1/datasets/{dataset}/snapshots` | every snapshot, with its size and SHA-256 |
-| `GET /v1/datasets/{dataset}/snapshots/{id}/corrections.parquet` | one snapshot |
+| `GET /v1/datasets/{dataset}/events` | the chain of this database, and every event file with its size and SHA-256 |
+| `GET /v1/datasets/{dataset}/events/{id}/events.parquet` | one event file |
 
-LightlyStudio records no change, so a correction is the difference between LightlyStudio
-and `loaded_box`:
+- An event file holds the boxes of the log entries after the last file: each box as
+  LightlyStudio holds it now, or a tombstone. A box edited twice is one row.
+- A listing first publishes the new log entries, and stores a file when there are any.
+  A stored file never changes.
+- Each file names the one before it, and the range of the log that it covers. The
+  listing locks the log, so a file never skips an entry that commits late.
+- The boxes are whole pixels, as LightlyStudio stores them. The lake compares an event
+  with the source box rounded to whole pixels, so a box that was only relabelled keeps
+  its exact coordinates.
+- The first file of a dataset also holds the boxes of its latest snapshot of ADR 0009,
+  as LightlyStudio holds them now.
 
-| LightlyStudio holds | Correction |
-| --- | --- |
-| a box that differs from its record | `update`, with the new label, the new box, or both |
-| no box for a record | `delete` |
-| a box with no record | `add`, under the id that LightlyStudio gave it |
-
-- A snapshot holds every live correction, not only the new ones. The lake applies the
-  latest snapshot to the untouched source on every silver build, so a correction stays
-  in every snapshot until a curator takes it back.
-- A listing first looks for a change, and stores a new snapshot when there is one. A
-  stored snapshot never changes.
-- Each snapshot names the one before it. The lake rejects a chain that breaks.
-- The boxes are whole pixels, as LightlyStudio stores them. A box that was only
-  relabelled has no box in the snapshot, so the lake keeps its exact coordinates.
-
-The snapshots are in Postgres, in `lakehouse_sync.snapshot`. A database that is lost
-starts a new chain, and the lake then rejects it. Back up Postgres.
+The files are in Postgres, in `lakehouse_sync.event_file`. A new database starts a new
+chain under a new id, and the lake keeps the files of the old one. Back up Postgres all
+the same: an edit that the lake did not fetch yet is lost with the database.
 
 ## Settings
 

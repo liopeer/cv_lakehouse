@@ -11,7 +11,6 @@ consumer does, so the two images release independently.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime
 from typing import Protocol
 
 import httpx
@@ -28,10 +27,18 @@ class GoldSplit(BaseModel):
     role: str
 
 
+class EventMarker(BaseModel):
+    """The last log entry of a LightlyStudio database that gold holds."""
+
+    chain_id: str
+    log_sequence: int
+
+
 class GoldDataset(BaseModel):
     dataset: str
     embedding_model: str | None
     splits: list[GoldSplit]
+    last_event: EventMarker | None = None
 
 
 class GoldSlice(BaseModel):
@@ -53,8 +60,7 @@ class GoldSlice(BaseModel):
 class GoldMeta(BaseModel):
     """The part of the gold manifest that the sync reads."""
 
-    version: int
-    built_at: datetime
+    build_id: str
     datasets: list[GoldDataset]
 
 
@@ -68,11 +74,7 @@ class GoldClient(Protocol):
     def count_images(self, gold_slice: GoldSlice) -> int: ...
 
     def iter_pages(
-        self,
-        *,
-        table: str,
-        gold_slice: GoldSlice,
-        changed_since: datetime | None = None,
+        self, *, table: str, gold_slice: GoldSlice
     ) -> Iterator[pa.Table]: ...
 
 
@@ -106,13 +108,7 @@ class HttpGoldClient(GoldClient):
         response.raise_for_status()
         return response.json()["count"]
 
-    def iter_pages(
-        self,
-        *,
-        table: str,
-        gold_slice: GoldSlice,
-        changed_since: datetime | None = None,
-    ) -> Iterator[pa.Table]:
+    def iter_pages(self, *, table: str, gold_slice: GoldSlice) -> Iterator[pa.Table]:
         # The curators work on the gold of now, not on a frozen release.
         params: dict[str, str | int] = {
             **gold_slice.to_params(),
@@ -121,8 +117,6 @@ class HttpGoldClient(GoldClient):
             if table in EMBEDDING_TABLES
             else self._rows_per_page,
         }
-        if changed_since is not None:
-            params["changed_since"] = changed_since.isoformat()
         while True:
             response = self._client.get(
                 url=f"/v1/{table}",

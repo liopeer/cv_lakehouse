@@ -24,14 +24,11 @@ def start_sync_service() -> None:
     # this package stands, so the report of each sync run reaches the container log.
     logging.getLogger("cv_lakehouse_studio").setLevel(logging.INFO)
     settings = StudioSettings.model_validate({})
-    sync_lock = threading.Lock()
     threading.Thread(
-        target=run_sync_loop,
-        kwargs={"settings": settings, "sync_lock": sync_lock},
-        daemon=True,
+        target=run_sync_loop, kwargs={"settings": settings}, daemon=True
     ).start()
     uvicorn.run(
-        create_export_app(database_url=settings.database_url, sync_lock=sync_lock),
+        create_export_app(database_url=settings.database_url),
         host="0.0.0.0",
         port=settings.export_port,
     )

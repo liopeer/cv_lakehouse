@@ -15,7 +15,6 @@ from numpy.typing import NDArray
 
 from lakehouse_core.lake_files import remove_tree
 from lakehouse_cv.contract.box_identity import derive_box_id
-from lakehouse_cv.contract.correction_actions import CorrectionAction
 from lakehouse_cv.contract.silver_tables import (
     CROP_EMBEDDING_SCHEMA,
     EMBEDDING_SCHEMA,
@@ -82,7 +81,7 @@ class _Lake:
         self.embedder = ContentEmbedder()
 
     def build_silver(self, rows: list[dict] | None = None) -> None:
-        """Publish the rows as a snapshot, if any, and rebuild silver."""
+        """Publish the rows as an event file, if any, and rebuild silver."""
         if rows is not None:
             self.server.publish(dataset=DATASET, rows=rows)
         self.embedder.forget_requests()
@@ -152,14 +151,26 @@ def reuse_lake(
     return reuse_lake
 
 
-def _correction(box_id: str, action: str, file_name: str = PARADE, **fields) -> dict:
+def _event(
+    box_id: str,
+    *,
+    file_name: str = PARADE,
+    label_name: str = "face",
+    geometry: tuple[float, float, float, float] = (10.0, 20.0, 30.0, 40.0),
+    is_deleted: bool = False,
+) -> dict:
+    x, y, w, h = (None, None, None, None) if is_deleted else geometry
     return {
         "dataset": DATASET,
         "split": "train",
         "file_name": file_name,
         "box_id": box_id,
-        "action": action,
-        **fields,
+        "is_deleted": is_deleted,
+        "label_name": None if is_deleted else label_name,
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
     }
 
 
@@ -183,9 +194,7 @@ def test_a_rebuild_with_no_change_embeds_nothing(reuse_lake: _Lake) -> None:
 def test_a_relabelled_box_keeps_its_vector(reuse_lake: _Lake) -> None:
     crops = reuse_lake.read_crop_vectors()
 
-    reuse_lake.build_silver(
-        [_correction(box_id=FACE, action=CorrectionAction.UPDATE, label_name="head")]
-    )
+    reuse_lake.build_silver([_event(FACE, label_name="head")])
 
     assert reuse_lake.embedder.crops == []
     assert reuse_lake.read_crop_vectors() == crops
@@ -194,18 +203,7 @@ def test_a_relabelled_box_keeps_its_vector(reuse_lake: _Lake) -> None:
 def test_a_moved_box_is_the_only_one_embedded_again(reuse_lake: _Lake) -> None:
     crops = reuse_lake.read_crop_vectors()
 
-    reuse_lake.build_silver(
-        [
-            _correction(
-                box_id=FACE,
-                action=CorrectionAction.UPDATE,
-                x=12.0,
-                y=22.0,
-                w=33.0,
-                h=44.0,
-            )
-        ]
-    )
+    reuse_lake.build_silver([_event(FACE, geometry=(12.0, 22.0, 33.0, 44.0))])
 
     (crop,) = reuse_lake.embedder.crops
     assert (crop.x, crop.y, crop.width, crop.height) == (12, 22, 33, 44)
@@ -222,17 +220,8 @@ def test_a_drawn_box_is_embedded_and_a_deleted_box_loses_its_row(
 ) -> None:
     reuse_lake.build_silver(
         [
-            _correction(box_id=FACE, action=CorrectionAction.DELETE),
-            _correction(
-                box_id=DRAWN,
-                action=CorrectionAction.ADD,
-                file_name=HANDSHAKING,
-                label_name="face",
-                x=1.0,
-                y=2.0,
-                w=3.0,
-                h=4.0,
-            ),
+            _event(FACE, is_deleted=True),
+            _event(DRAWN, file_name=HANDSHAKING, geometry=(1.0, 2.0, 3.0, 4.0)),
         ]
     )
 

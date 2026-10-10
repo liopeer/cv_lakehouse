@@ -107,15 +107,17 @@ for a query and for training.
 
 ### Corrections in silver
 
-Silver applies the latest [correction snapshot](#corrections) of its dataset on top of
-the normalised source. Bronze stays as published.
+Silver folds every [event file](#corrections) of its dataset over the normalised source.
+Bronze stays as published. Silver keeps the latest event of each box, in the order of
+the files and then of the log, and compares it with the source box:
 
-| A curator | Silver |
+| The latest event | Silver |
 | --- | --- |
-| relabels a box | takes the class. The box keeps its exact float coordinates |
-| moves a box | takes the whole pixels of LightlyStudio, clipped to the image |
-| deletes a box | drops it, and counts it under `dropped_reasons` as `studio_deleted` |
-| draws a box | adds it, under the id that LightlyStudio gave it |
+| holds another label | takes the class. The box keeps its exact float coordinates |
+| holds another box, in whole pixels | takes the whole pixels of LightlyStudio, clipped to the image |
+| is a tombstone | drops the box, and counts it under `dropped_reasons` as `studio_deleted` |
+| names a box that the source does not hold | adds it, under the id that LightlyStudio gave it |
+| equals the source box, rounded to whole pixels | changes nothing |
 
 - Three columns say what happened to a box: `origin` is `source` or `studio`, and
   `is_class_corrected` and `is_geometry_corrected` mark a change.
@@ -123,11 +125,12 @@ the normalised source. Bronze stays as published.
   neither.
 - A label that the class registry does not name becomes `other`, and `source_class`
   carries the label. To make it a class, add it to the registry.
-- The check `corrections_are_applied` lists such labels, and the corrections that found
-  no box. It warns and never blocks.
-- `_silver.json` names the snapshot that silver applied.
+- The check `corrections_are_applied` lists such labels, and the events that found no
+  image. It warns and never blocks.
+- `_silver.json` names the last log entry that silver folded, and `_gold.json` copies it.
+  The sync leaves a box that a curator edited after that entry.
 
-A new snapshot marks silver stale. Rebuild silver and gold by hand.
+A new event file marks silver stale. Rebuild silver and gold by hand.
 
 ### Flagged boxes
 
@@ -279,7 +282,7 @@ Gold changes with every correction, and a benchmark must not. The asset
 - The run fails when the val and test rows are those of the last release.
 - One number covers every dataset, so a benchmark names one release.
 - `_release.json` names the gold code version, and the silver build, the silver code
-  version and the correction snapshot of each dataset. A release is the only frozen copy
+  version and the last curator edit of each dataset. A release is the only frozen copy
   of gold.
 - A release holds no vector.
 
@@ -384,9 +387,10 @@ SeaweedFS, instead of moto.
 $CV_LAKEHOUSE_ROOT/
   bronze/<dataset>/            a manual download, or only the manifest of a linked copy
     _bronze.json                 every published file, with its URL and checksum
-  bronze/<dataset>_corrections/  the corrections that curators made in LightlyStudio
-    _corrections.json            every snapshot, with its checksum
-    snapshots/<id>/corrections.parquet   one immutable snapshot
+  bronze/<dataset>_corrections/  the edits that curators made in LightlyStudio
+    _corrections.json            every event file, with its checksum
+    events/<chain>/<id>/events.parquet   one immutable event file
+    snapshots/<id>/corrections.parquet   one snapshot of ADR 0009, as history
   silver/<dataset>/
     _silver.json                     the current build
     builds/<id>/images/<split>.parquet   one row per image
@@ -408,16 +412,16 @@ Only bronze holds pixels. Silver holds annotations, so it costs almost no disk.
 ## Curating gold in LightlyStudio
 
 [studio/](studio/README.md) holds a LightlyStudio server on Postgres, and a sync that
-loads gold into it through the gold API. Its start page lists every dataset. A curator's
-edit survives every later sync.
+writes gold into it through the gold API on every run. Its start page lists every
+dataset. A curator's edit stays until gold holds it.
 
 The loop, each step by hand:
 
 1. A curator relabels, moves, deletes or draws boxes in LightlyStudio.
-2. Materialize `bronze/<dataset>_corrections`. It fetches a snapshot of the corrections.
-3. Materialize `silver/<dataset>`, and then `gold/current`.
-4. The sync sees the new gold version on its next run. The corrected boxes stay as the
-   curator left them.
+2. Materialize `bronze/<dataset>_corrections`. It fetches an event file of the edits.
+3. Materialize `silver/<dataset>`, `silver/<dataset>_embeddings`, and then
+   `gold/current`.
+4. The next sync writes gold. The edited boxes stay as the curator left them.
 5. When a round of corrections is done, materialize `gold/eval_release`.
 
 ## Bronze
@@ -454,21 +458,24 @@ and the rest annotations.
 
 ### Corrections
 
-A curator fixes annotations in LightlyStudio. The export of [studio/](studio/README.md)
-publishes the fixes of a dataset as snapshots, and the asset
-`bronze/<dataset>_corrections` fetches them.
+A curator fixes annotations in LightlyStudio. The LightlyStudio database logs every edit.
+The export of [studio/](studio/README.md) publishes the logged edits of a dataset as
+event files, and the asset `bronze/<dataset>_corrections` fetches them. See
+[ADR 0014](docs/adr/0014-curator-edits-are-bronze-events.md).
 
 ```bash
 export CV_LAKEHOUSE_STUDIO_EXPORT_URL=http://studio-sync:8002
 ```
 
-- A snapshot is one Parquet file that never changes. It holds every correction that is
-  live when it is made, so the latest snapshot alone says what to change.
-- Bronze verifies the size and the checksum of a snapshot, and pins them in
+- An event file is one Parquet file that never changes. It holds one row per edited
+  box: the box as LightlyStudio held it, or a tombstone.
+- Bronze verifies the size and the checksum of a file, and pins them in
   `_corrections.json`.
-- Each snapshot names the one before it. The run fails when the chain breaks, or when
-  the export lists fewer snapshots than bronze holds. A LightlyStudio database that was
-  lost then cannot silently drop every correction.
+- Each file names the one before it, and the range of the log that it covers. The run
+  fails when the chain breaks, or when the export lists fewer files than bronze holds.
+- A new LightlyStudio database starts a new chain. Bronze keeps the old chain, and
+  silver folds both, so a lost database loses no edit.
+- The snapshots of ADR 0009 stay in bronze as history. Silver reads them no longer.
 - The asset has no upstream asset, so the graph stays acyclic.
 - When the variable is unset, the asset fetches nothing and still succeeds.
 

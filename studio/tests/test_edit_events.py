@@ -2,27 +2,27 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Find the corrections of a curator, publish them, and take them back from gold."""
+"""Log the edits of a curator, and publish them as event files."""
 
 import hashlib
 import io
-import threading
+from datetime import UTC, datetime
 
 import psycopg
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
-from cv_lakehouse_studio.corrections import (
-    CORRECTION_SCHEMA,
-    detect_corrections,
-    list_snapshots,
-    publish_snapshot_if_changed,
+from cv_lakehouse_studio.edit_events import (
+    EVENT_SCHEMA,
+    list_event_files,
+    publish_event_file_if_new,
 )
 from cv_lakehouse_studio.export_api import create_export_app
 from cv_lakehouse_studio.sync_loop import sync_every_dataset
 from tests import curator
-from tests.fakes import BOX_1, BOX_2, DATASET, IMAGE_B, FakeGoldClient, make_box
+from tests.fakes import BOX_1, BOX_2, DATASET, IMAGE_B, FakeGoldClient
 
 
 @pytest.fixture
@@ -32,75 +32,80 @@ def synced(database_url: str) -> FakeGoldClient:
     return client
 
 
-def _detect(database_url: str) -> list[dict]:
+def _publish(database_url: str) -> list[dict] | None:
+    """Publish an event file, and return its rows without the log entries."""
     with psycopg.connect(database_url) as connection:
-        table = detect_corrections(connection=connection, dataset=DATASET)
-    assert table.schema == CORRECTION_SCHEMA
-    return table.to_pylist()
+        event_file = publish_event_file_if_new(connection=connection, dataset=DATASET)
+        if event_file is None:
+            return None
+        row = connection.execute(
+            "select content from lakehouse_sync.event_file where event_file_id = %s",
+            (event_file.event_file_id,),
+        ).fetchone()
+    assert row is not None
+    table = pq.read_table(io.BytesIO(bytes(row[0])))
+    assert table.schema == EVENT_SCHEMA
+    return [
+        {key: value for key, value in event.items() if key != "log_sequence"}
+        for event in table.to_pylist()
+    ]
 
 
-def _publish(database_url: str) -> str | None:
-    with psycopg.connect(database_url) as connection:
-        snapshot = publish_snapshot_if_changed(connection=connection, dataset=DATASET)
-    return None if snapshot is None else snapshot.snapshot_id
-
-
-def _correction(box_id: str, action: str, **fields) -> dict:
+def _event(box_id: str, **fields) -> dict:
     return {
         "dataset": DATASET,
         "split": "train",
         "file_name": "a.jpg",
         "box_id": box_id,
-        "action": action,
-        "label_name": None,
-        "x": None,
-        "y": None,
-        "w": None,
-        "h": None,
+        "is_deleted": False,
+        "label_name": "face",
+        "x": 10.0,
+        "y": 21.0,
+        "w": 30.0,
+        "h": 40.0,
         **fields,
     }
 
 
+def _tombstone(box_id: str) -> dict:
+    return _event(
+        box_id, is_deleted=True, label_name=None, x=None, y=None, w=None, h=None
+    )
+
+
 @pytest.mark.usefixtures("synced")
-def test_an_untouched_dataset_has_no_correction(database_url: str) -> None:
-    assert _detect(database_url) == []
+def test_an_untouched_dataset_has_no_event_file(database_url: str) -> None:
     assert _publish(database_url) is None
 
 
 @pytest.mark.usefixtures("synced")
-def test_a_relabelled_box_reports_the_label_and_no_geometry(database_url: str) -> None:
+def test_a_relabelled_box_is_an_event_with_its_whole_box(database_url: str) -> None:
     curator.relabel_box(box_id=BOX_1, label_name="other")
-    assert _detect(database_url) == [
-        _correction(box_id=BOX_1, action="update", label_name="other")
-    ]
+    assert _publish(database_url) == [_event(BOX_1, label_name="other")]
 
 
 @pytest.mark.usefixtures("synced")
-def test_a_moved_box_reports_the_geometry_and_no_label(database_url: str) -> None:
+def test_a_moved_box_is_an_event_with_its_whole_box(database_url: str) -> None:
     curator.move_box(box_id=BOX_1, x=11, y=21, width=30, height=40)
-    assert _detect(database_url) == [
-        _correction(box_id=BOX_1, action="update", x=11.0, y=21.0, w=30.0, h=40.0)
-    ]
+    assert _publish(database_url) == [_event(BOX_1, x=11.0)]
 
 
 @pytest.mark.usefixtures("synced")
-def test_a_deleted_box_reports_a_delete(database_url: str) -> None:
+def test_a_deleted_box_is_a_tombstone(database_url: str) -> None:
     curator.delete_box(BOX_2)
-    assert _detect(database_url) == [_correction(box_id=BOX_2, action="delete")]
+    assert _publish(database_url) == [_tombstone(BOX_2)]
 
 
 @pytest.mark.usefixtures("synced")
-def test_a_drawn_box_reports_an_add_under_its_own_id(database_url: str) -> None:
+def test_a_drawn_box_is_an_event_under_its_own_id(database_url: str) -> None:
     drawn = curator.draw_box(
         image_id=IMAGE_B, label_name="face", x=1, y=2, width=3, height=4
     )
-    assert _detect(database_url) == [
-        _correction(
-            box_id=drawn,
-            action="add",
+    assert _publish(database_url) == [
+        _event(
+            drawn,
             split="validation",
             file_name="b.jpg",
-            label_name="face",
             x=1.0,
             y=2.0,
             w=3.0,
@@ -110,132 +115,114 @@ def test_a_drawn_box_reports_an_add_under_its_own_id(database_url: str) -> None:
 
 
 @pytest.mark.usefixtures("synced")
-def test_a_box_that_a_curator_put_back_reports_nothing(database_url: str) -> None:
+def test_a_box_edited_twice_is_one_event_of_the_box_as_it_is(database_url: str) -> None:
     curator.move_box(box_id=BOX_1, x=99, y=21, width=30, height=40)
     curator.move_box(box_id=BOX_1, x=10, y=21, width=30, height=40)
-    assert _detect(database_url) == []
+    assert _publish(database_url) == [_event(BOX_1)]
 
 
 @pytest.mark.usefixtures("synced")
-def test_a_snapshot_is_published_once_per_change(database_url: str) -> None:
+def test_an_event_file_is_published_once_per_edit(database_url: str) -> None:
     curator.relabel_box(box_id=BOX_1, label_name="other")
-    first = _publish(database_url)
-    assert first is not None and first.startswith("000001-")
+    assert _publish(database_url) is not None
     assert _publish(database_url) is None
 
     curator.delete_box(BOX_2)
-    second = _publish(database_url)
+    assert _publish(database_url) == [_tombstone(BOX_2)]
 
-    assert second is not None and second.startswith("000002-")
     with psycopg.connect(database_url) as connection:
-        snapshots = list_snapshots(connection=connection, dataset=DATASET)
-    assert [snapshot.parent_snapshot_id for snapshot in snapshots] == [None, first]
-    # A snapshot holds every live correction, so the second one holds both.
-    assert [snapshot.row_count for snapshot in snapshots] == [1, 2]
+        first, second = list_event_files(connection=connection, dataset=DATASET)
+    assert second.parent_event_file_id == first.event_file_id
+    assert second.after_log_sequence == first.last_log_sequence
+    assert second.last_log_sequence > first.last_log_sequence
 
 
-@pytest.mark.usefixtures("synced")
-def test_corrections_that_a_curator_took_back_give_an_empty_snapshot(
-    database_url: str,
+def test_the_sync_publishes_no_event(database_url: str) -> None:
+    client = FakeGoldClient()
+    sync_every_dataset(client=client, image_base="/lake")
+    del client.boxes[1]
+    sync_every_dataset(client=client, image_base="/lake")
+
+    assert _publish(database_url) is None
+
+
+def test_the_first_event_file_takes_over_the_latest_snapshot(
+    database_url: str, synced: FakeGoldClient
 ) -> None:
-    curator.relabel_box(box_id=BOX_1, label_name="other")
-    _publish(database_url)
-    curator.relabel_box(box_id=BOX_1, label_name="face")
-
-    assert _publish(database_url) is not None
+    """A correction made before the log is in the first event file."""
+    curator.delete_box(BOX_2)
     with psycopg.connect(database_url) as connection:
-        snapshots = list_snapshots(connection=connection, dataset=DATASET)
-    assert [snapshot.row_count for snapshot in snapshots] == [1, 0]
+        # The sync was the one to log nothing so far. Drop the delete from the log, as
+        # a database before the triggers holds no entry.
+        connection.execute("delete from lakehouse_sync.edit_log")
+        connection.execute(
+            """
+            insert into lakehouse_sync.snapshot
+                (dataset, sequence, snapshot_id, parent_snapshot_id, created_at,
+                 row_count, size, sha256, content)
+            values (%s, 1, '000001-old', null, %s, 1, 0, '', %s)
+            """,
+            (DATASET, datetime(2026, 1, 1, tzinfo=UTC), _serialize_snapshot([BOX_2])),
+        )
+    curator.relabel_box(box_id=BOX_1, label_name="other")
+
+    assert _publish(database_url) == [
+        _tombstone(BOX_2),
+        _event(BOX_1, label_name="other"),
+    ]
+
+
+def _serialize_snapshot(box_ids: list[str]) -> bytes:
+    table = pa.table(
+        {
+            "dataset": [DATASET] * len(box_ids),
+            "split": ["train"] * len(box_ids),
+            "file_name": ["a.jpg"] * len(box_ids),
+            "box_id": box_ids,
+            "action": ["delete"] * len(box_ids),
+        }
+    )
+    sink = pa.BufferOutputStream()
+    pq.write_table(table=table, where=sink)
+    return sink.getvalue().to_pybytes()
 
 
 @pytest.mark.usefixtures("synced")
 def test_the_export_lists_and_serves_what_it_pinned(database_url: str) -> None:
     curator.relabel_box(box_id=BOX_1, label_name="other")
-    client = TestClient(
-        create_export_app(database_url=database_url, sync_lock=threading.Lock())
-    )
+    client = TestClient(create_export_app(database_url=database_url))
 
-    # The listing itself looks for new corrections.
-    (listed,) = client.get(f"/v1/datasets/{DATASET}/snapshots").json()
+    # The listing itself publishes the new edits.
+    listing = client.get(f"/v1/datasets/{DATASET}/events").json()
+    (listed,) = listing["event_files"]
     content = client.get(f"/{listed['path']}").content
 
-    assert (listed["sequence"], listed["parent_snapshot_id"]) == (1, None)
+    assert listing["chain_id"]
+    assert (listed["sequence"], listed["parent_event_file_id"]) == (1, None)
+    assert listed["after_log_sequence"] == 0
     assert (len(content), hashlib.sha256(content).hexdigest()) == (
         listed["size"],
         listed["sha256"],
     )
     table = pq.read_table(io.BytesIO(content))
-    assert table.schema == CORRECTION_SCHEMA
     assert table.column("label_name").to_pylist() == ["other"]
-    # A second listing finds no change, so it publishes nothing.
-    assert len(client.get(f"/v1/datasets/{DATASET}/snapshots").json()) == 1
+    # A second listing finds no new edit, so it publishes nothing.
+    assert len(client.get(f"/v1/datasets/{DATASET}/events").json()["event_files"]) == 1
     assert (
-        client.get(
-            f"/v1/datasets/{DATASET}/snapshots/nope/corrections.parquet"
-        ).status_code
+        client.get(f"/v1/datasets/{DATASET}/events/nope/events.parquet").status_code
         == 404
     )
 
 
 def test_the_export_answers_503_before_the_first_sync(database_url: str) -> None:
-    client = TestClient(
-        create_export_app(database_url=database_url, sync_lock=threading.Lock())
-    )
+    client = TestClient(create_export_app(database_url=database_url))
     assert client.get("/healthz").json() == {"status": "ok"}
-    assert client.get(f"/v1/datasets/{DATASET}/snapshots").status_code == 503
+    assert client.get(f"/v1/datasets/{DATASET}/events").status_code == 503
 
 
-def test_the_corrections_stay_live_after_they_come_back_in_gold(
-    database_url: str, synced: FakeGoldClient
-) -> None:
-    """The lake applies a snapshot to the untouched source on every silver build.
-
-    So a correction must stay in every later snapshot, also once gold holds it.
-    """
-    curator.move_box(box_id=BOX_1, x=11, y=21, width=30, height=40)
-    curator.delete_box(BOX_2)
-    drawn = curator.draw_box(
-        image_id=IMAGE_B, label_name="face", x=1, y=2, width=3, height=4
-    )
-    before = _detect(database_url)
-    assert _publish(database_url) is not None
-
-    # Silver applied the snapshot, and gold was rebuilt from it.
-    synced.boxes = [
-        make_box(box_id=BOX_1, class_name="face", x=11.0, y=21.0, w=30.0, h=40.0),
-        {
-            **make_box(
-                box_id=drawn,
-                class_name="face",
-                x=1.0,
-                y=2.0,
-                w=3.0,
-                h=4.0,
-                origin="studio",
-            ),
-            "image_id": IMAGE_B,
-        },
-    ]
-    synced.publish_new_version()
-    (report,) = sync_every_dataset(client=synced, image_base="/lake")
-
-    assert (report.num_new_boxes, report.num_updated_boxes) == (0, 0)
-    assert report.num_removed_boxes == 0
-    assert _detect(database_url) == before
-    assert _publish(database_url) is None
-
-    # The curator deletes the drawn box. The sync must not bring it back from gold.
-    curator.delete_box(drawn)
-    synced.publish_new_version()
-    sync_every_dataset(client=synced, image_base="/lake")
-    assert {row["box_id"] for row in _detect(database_url)} == {BOX_1, BOX_2}
-
-
-def test_the_corrections_of_a_split_dataset_come_under_the_gold_dataset(
+def test_the_edits_of_a_split_dataset_come_under_the_gold_dataset(
     database_url: str,
 ) -> None:
     sync_every_dataset(client=FakeGoldClient(), image_base="/lake", max_images=1)
     curator.relabel_box(box_id=BOX_1, label_name="other")
-    assert _detect(database_url) == [
-        _correction(box_id=BOX_1, action="update", label_name="other")
-    ]
+    assert _publish(database_url) == [_event(BOX_1, label_name="other")]

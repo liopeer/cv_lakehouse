@@ -34,6 +34,7 @@ from lakehouse_cv.contract.manifests import (
 from lakehouse_cv.contract.silver_tables import boxes_file, images_file
 from lakehouse_cv.defs.corrections import (
     build_corrections_key,
+    list_event_paths,
     read_corrections_manifest,
 )
 from lakehouse_cv.defs.resources import CvLakeResource
@@ -96,11 +97,12 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
         build_id = create_build_id()
         staged_dir = build_dir(layer_dir=silver_dir, build_id=build_id)
         corrections = read_corrections_manifest(paths=lake.paths, name=name)
-        snapshot = corrections.snapshots[-1] if corrections.snapshots else None
-        overlay = CorrectionOverlay.from_snapshot(
-            None
-            if snapshot is None
-            else lake.paths.corrections_dir(name) / snapshot.file.path
+        overlay = CorrectionOverlay.from_event_files(
+            list_event_paths(
+                paths=lake.paths,
+                manifest=corrections,
+                last_event=corrections.last_event,
+            )
         )
 
         # Counted by the writer as it streams, not read back off the Parquet. These
@@ -166,9 +168,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 commercial_use=spec.commercial_use,
                 image_roots=bronze.image_roots,
                 splits=list(bronze.splits),
-                correction_snapshot_id=(
-                    None if snapshot is None else snapshot.snapshot_id
-                ),
+                last_event=corrections.last_event,
             ),
         )
         return dg.MaterializeResult(
@@ -177,9 +177,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 num_images=num_images,
                 num_boxes=num_boxes,
                 dropped_box_reasons=dropped_box_reasons,
-                correction_snapshot_id=(
-                    "none" if snapshot is None else snapshot.snapshot_id
-                ),
+                num_event_files=len(corrections.event_files),
                 num_corrections_applied=overlay.num_applied,
             )
         )
@@ -215,7 +213,7 @@ def _build_run_metadata(
     num_images: int,
     num_boxes: int,
     dropped_box_reasons: Mapping[str, int],
-    correction_snapshot_id: str,
+    num_event_files: int,
     num_corrections_applied: int,
 ) -> dict:
     """What this run did, for the Dagster UI. Not persisted beside the data."""
@@ -224,7 +222,7 @@ def _build_run_metadata(
         "num_boxes": num_boxes,
         "license": license_name,
         "dropped_reasons": dg.MetadataValue.json(dict(dropped_box_reasons)),
-        "correction_snapshot": correction_snapshot_id,
+        "num_event_files": num_event_files,
         "num_corrections_applied": num_corrections_applied,
     }
 
@@ -294,31 +292,26 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
         asset=key,
         name="corrections_are_applied",
         description=(
-            "Every correction found its box, and every label of a curator is a class "
-            "of the registry."
+            "Every edited box that is no tombstone is in silver, and every label of a "
+            "curator is a class of the registry."
         ),
     )
     def _corrections_are_applied(lake: CvLakeResource) -> dg.AssetCheckResult:
         """Report what the overlay could not apply as the curator meant it.
 
         Neither case fails the run. A box with an unknown label is in silver as
-        `other`, and a correction with no box changes nothing.
+        `other`, and an event with no box changes nothing.
         """
         manifest = read_silver_manifest(paths=lake.paths, name=name)
-        snapshot_path = next(
-            (
-                lake.paths.corrections_dir(name) / snapshot.file.path
-                for snapshot in read_corrections_manifest(
-                    paths=lake.paths, name=name
-                ).snapshots
-                if snapshot.snapshot_id == manifest.correction_snapshot_id
-            ),
-            None,
+        folded = list_event_paths(
+            paths=lake.paths,
+            manifest=read_corrections_manifest(paths=lake.paths, name=name),
+            last_event=manifest.last_event,
         )
-        if snapshot_path is None:
-            return dg.AssetCheckResult(passed=True, metadata={"snapshot": "none"})
+        if not folded:
+            return dg.AssetCheckResult(passed=True, metadata={"num_event_files": 0})
         parameters = {
-            "snapshot": str(snapshot_path),
+            "events": [str(path) for path in folded],
             "boxes": str(
                 silver_build_dir(paths=lake.paths, manifest=manifest)
                 / "boxes"
@@ -327,12 +320,12 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
         }
         with lake.store.duckdb() as connection:
             orphans = connection.execute(
-                query=_ORPHAN_CORRECTION_QUERY, parameters=parameters
+                query=_ORPHAN_EVENT_QUERY, parameters=parameters
             ).fetchall()
             unknown_labels = connection.execute(
                 query=_UNKNOWN_LABEL_QUERY,
                 parameters={
-                    "snapshot": str(snapshot_path),
+                    "events": parameters["events"],
                     "names": sorted(CanonicalClass.all_class_names()),
                 },
             ).fetchall()
@@ -340,9 +333,9 @@ def build_silver_checks(name: str) -> list[dg.AssetChecksDefinition]:
             passed=not orphans and not unknown_labels,
             severity=dg.AssetCheckSeverity.WARN,
             metadata={
-                "snapshot": manifest.correction_snapshot_id,
+                "num_event_files": len(folded),
                 "num_orphans": len(orphans),
-                "orphans": [f"{action} {box_id}" for box_id, action in orphans[:10]],
+                "orphans": [box_id for (box_id,) in orphans[:10]],
                 "unknown_labels": [label for (label,) in unknown_labels],
             },
         )
@@ -389,20 +382,30 @@ select file_name, problem from judged where problem is not null
 """
 
 
-# A changed or an added box that silver does not hold. Its source box is gone, its
-# image is not in the split, or the corrected box has no area inside the image. A
-# deleted box leaves no trace either way, so this cannot report it.
-_ORPHAN_CORRECTION_QUERY = """
-select c.box_id, c.action
-from read_parquet($snapshot) c
-left join read_parquet($boxes) b on b.box_id = c.box_id
-where c.action <> 'delete' and b.box_id is null
-order by c.box_id
+# The latest event of each box, in the order of the files and then of the log.
+_LATEST_EVENTS = """
+select * from read_parquet($events, filename = true)
+qualify row_number() over (
+    partition by box_id order by list_position($events, filename) desc,
+        log_sequence desc
+) = 1
+"""
+
+# An edited box that is no tombstone and that silver does not hold. Its image is not in
+# the split, or the box has no area inside the image. A tombstone leaves no trace either
+# way, so this cannot report it.
+_ORPHAN_EVENT_QUERY = f"""
+with latest as ({_LATEST_EVENTS})
+select e.box_id
+from latest e
+left join read_parquet($boxes) b on b.box_id = e.box_id
+where not e.is_deleted and b.box_id is null
+order by e.box_id
 """
 
 _UNKNOWN_LABEL_QUERY = """
 select distinct label_name
-from read_parquet($snapshot)
+from read_parquet($events)
 where label_name is not null and not list_contains($names, lower(label_name))
 order by label_name
 """

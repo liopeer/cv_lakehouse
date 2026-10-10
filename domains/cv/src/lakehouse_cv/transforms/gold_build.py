@@ -158,7 +158,7 @@ def build_gold(
                     commercial_use=silver.commercial_use,
                     silver_code_version=silver.code_version,
                     silver_build_id=silver.build_id,
-                    correction_snapshot_id=silver.correction_snapshot_id,
+                    last_event=silver.last_event,
                     splits=splits,
                 )
             )

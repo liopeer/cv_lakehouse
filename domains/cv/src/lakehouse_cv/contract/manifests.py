@@ -42,14 +42,47 @@ class CorrectionSnapshot(BaseModel):
     file: PublishedFile
 
 
-class CorrectionsManifest(BaseModel):
-    """The correction snapshots of one dataset, oldest first.
+class CorrectionEventFile(BaseModel):
+    # The LightlyStudio database that logged the events. A new database starts a new
+    # chain.
+    chain_id: str
+    event_file_id: str
+    # The position of the file in its chain, from 1.
+    sequence: int
+    parent_event_file_id: str | None
+    # The file covers the log entries after the one and up to the other.
+    after_log_sequence: int
+    last_log_sequence: int
+    created_at: datetime
+    row_count: int
+    # The pin: the size and the checksum that the download verified.
+    file: PublishedFile
 
-    Silver applies the last one. The others are history.
+
+class EventMarker(BaseModel):
+    """The last log entry of a LightlyStudio database that a layer holds."""
+
+    chain_id: str
+    log_sequence: int
+
+
+class CorrectionsManifest(BaseModel):
+    """The curator edits of one dataset, in the order that bronze took them.
+
+    Silver folds every event file. The snapshots of ADR 0009 are history, and silver
+    reads them no longer.
     """
 
     dataset: str
     snapshots: list[CorrectionSnapshot] = Field(default_factory=list)
+    event_files: list[CorrectionEventFile] = Field(default_factory=list)
+
+    @property
+    def last_event(self) -> EventMarker | None:
+        if not self.event_files:
+            return None
+        last = self.event_files[-1]
+        return EventMarker(chain_id=last.chain_id, log_sequence=last.last_log_sequence)
 
 
 def builds_dir(layer_dir: UPath) -> UPath:
@@ -83,8 +116,8 @@ class SilverManifest(BuildManifest):
     # Keyed by the source's own split names, which are also the Parquet file stems.
     image_roots: dict[str, str]
     splits: list[str]
-    # The correction snapshot that this silver applied, or None for the bare source.
-    correction_snapshot_id: str | None = None
+    # The last curator edit that this silver folded, or None for the bare source.
+    last_event: EventMarker | None = None
 
 
 class EmbeddingsManifest(BuildManifest):
@@ -112,8 +145,8 @@ class GoldDataset(BaseModel):
     commercial_use: bool
     silver_code_version: str
     silver_build_id: str
-    # The correction snapshot that the silver of this dataset applied.
-    correction_snapshot_id: str | None = None
+    # The last curator edit that gold holds. The sync leaves a box with a later edit.
+    last_event: EventMarker | None = None
     splits: list[GoldSplit]
 
 
