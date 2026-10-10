@@ -1,7 +1,7 @@
 [project]
 name = "lakehouse-cv"
 requires-python = ">=3.12,<3.15"
-version = "0.6.0"
+version = "0.6.1"
 description = "The computer vision domain of the lakehouse, built on Dagster."
 authors = [{ name = "Lionel Peer" }]
 license = "MIT"

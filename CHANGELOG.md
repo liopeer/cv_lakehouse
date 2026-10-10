@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/liopeer/cv_lakehouse/compare/v0.6.0...v0.6.1) (2026-10-10)
+
+
+### Documentation
+
+* **adr:** propose curator edits as bronze events ([#65](https://github.com/liopeer/cv_lakehouse/issues/65)) ([3c41e36](https://github.com/liopeer/cv_lakehouse/commit/3c41e361160116c37b67bd83700d09495c744c67))
+
 ## [0.6.0](https://github.com/liopeer/cv_lakehouse/compare/v0.5.0...v0.6.0) (2026-10-09)
 
 
