@@ -6,13 +6,18 @@
 
 from uuid import UUID
 
+import pyarrow as pa
 import pytest
 from lightly_studio.database import db_manager
 from lightly_studio.resolvers import annotation_resolver
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+from sqlmodel import Session
 
+from cv_lakehouse_studio import sync
 from cv_lakehouse_studio.sync_loop import sync_every_dataset
 from cv_lakehouse_studio.sync_state import create_sync_schema
+from tests.curator import relabel_box
 from tests.fakes import (
     BOX_1,
     BOX_2,
@@ -158,6 +163,45 @@ def test_a_box_that_a_curator_moved_is_never_overwritten() -> None:
 
     assert report.num_updated_boxes == 0
     assert _fetch_boxes()[BOX_1] == ("face", 77, 21, 30, 40)
+
+
+def test_a_box_that_a_curator_relabelled_is_never_overwritten() -> None:
+    client = FakeGoldClient()
+    _sync(client)
+    relabel_box(box_id=BOX_1, label_name="other")
+    client.boxes[0] = make_box(
+        box_id=BOX_1, class_name="face", x=50.0, y=20.0, w=30.0, h=40.0
+    )
+    client.publish_new_version()
+
+    (report,) = _sync(client)
+
+    assert report.num_updated_boxes == 0
+    assert _fetch_boxes()[BOX_1] == ("other", 10, 21, 30, 40)
+
+
+def test_the_first_sync_updates_no_box() -> None:
+    (report,) = _sync(FakeGoldClient())
+
+    assert report.num_updated_boxes == 0
+
+
+def test_a_sync_over_its_statement_timeout_fails_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def stage_boxes_slowly(*, session: Session, page: pa.Table) -> None:
+        session.execute(text("select pg_sleep(0.1)"))
+
+    monkeypatch.setattr(sync, "stage_boxes", stage_boxes_slowly)
+    with pytest.raises(OperationalError, match="statement timeout"):
+        sync_every_dataset(
+            client=FakeGoldClient(),
+            image_base=IMAGE_BASE,
+            statement_timeout_seconds=0.01,
+        )
+    db_manager.persistent_session().rollback()
+
+    assert _fetch("select count(*) from lakehouse_sync.loaded_box") == [(0,)]
 
 
 def test_a_box_that_a_curator_deleted_is_never_loaded_again() -> None:

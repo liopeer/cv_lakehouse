@@ -48,6 +48,10 @@ from cv_lakehouse_studio.sync_state import SYNC_SCHEMA
 # The `origin` that gold gives a box that a curator drew.
 STUDIO_ORIGIN = "studio"
 
+# The largest statement of a healthy first sync runs for minutes. A bad plan runs for
+# hours, and it holds the lock that the export waits for.
+DEFAULT_STATEMENT_TIMEOUT_SECONDS = 1800.0
+
 
 @dataclass(frozen=True)
 class SyncReport:
@@ -81,6 +85,7 @@ def sync_dataset(
     studio_dataset: StudioDataset,
     class_names: Sequence[str],
     image_base: str,
+    statement_timeout_seconds: float,
 ) -> SyncReport:
     name = studio_dataset.name
     gold_slice = studio_dataset.gold_slice
@@ -115,6 +120,11 @@ def sync_dataset(
     )
 
     create_staging_tables(session)
+    # The setting ends with the transaction.
+    session.execute(
+        text("select set_config('statement_timeout', :timeout, true)"),
+        {"timeout": f"{statement_timeout_seconds * 1000:.0f}"},
+    )
     stage_names(session=session, table="stage_label", ids=scaffold.label_ids)
     stage_names(session=session, table="stage_tag", ids=scaffold.tag_ids)
     for page in client.iter_pages(table="images", gold_slice=gold_slice):
@@ -125,6 +135,11 @@ def sync_dataset(
         embedding_pages = itertools.chain([first_embedding_page], embedding_pages)
     for ids, page in embedding_pages:
         stage_embeddings(session=session, ids=ids, page=page)
+    # Autovacuum never analyzes a temp table. Without statistics, the planner guesses
+    # the size of each staging table.
+    session.execute(
+        text("analyze stage_label, stage_tag, stage_image, stage_box, stage_embedding")
+    )
 
     parameters = {
         "dataset": dataset.dataset,
@@ -284,6 +299,52 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         """,
     ),
     (
+        # Gold changed the box, and LightlyStudio still holds what the sync wrote. The
+        # changes run before the new boxes, so that this join never visits a box that
+        # this run inserts.
+        "changed_box_table",
+        f"""
+        create temp table changed_box on commit drop as
+        select staged.* from stage_box staged
+        join {SYNC_SCHEMA}.loaded_box loaded on loaded.box_id = staged.box_id
+        {_STUDIO_BOX_JOINS}
+        where loaded.studio_dataset = :studio_dataset
+          and (staged.label, staged.x, staged.y, staged.width, staged.height)
+              is distinct from
+              (loaded.label, loaded.x, loaded.y, loaded.width, loaded.height)
+          and {_STUDIO_EQUALS_LOADED}
+        """,
+    ),
+    (
+        "changed_detections",
+        """
+        update object_detection_annotation detection
+        set x = changed.x, y = changed.y, width = changed.width, height = changed.height
+        from changed_box changed
+        where detection.sample_id = changed.box_id
+        """,
+    ),
+    (
+        "changed_labels",
+        """
+        update annotation_base base
+        set annotation_label_id = stage_label.label_id
+        from changed_box changed
+        join stage_label on stage_label.name = changed.label
+        where base.sample_id = changed.box_id
+        """,
+    ),
+    (
+        "updated_boxes",
+        f"""
+        update {SYNC_SCHEMA}.loaded_box loaded
+        set label = changed.label, x = changed.x, y = changed.y,
+            width = changed.width, height = changed.height
+        from changed_box changed
+        where loaded.box_id = changed.box_id
+        """,
+    ),
+    (
         # A box that a curator drew comes back from gold under the id that
         # LightlyStudio gave it. It stays the curator's: the sync neither inserts it
         # nor records it, so the export keeps it as a correction.
@@ -331,49 +392,6 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
             (box_id, image_id, dataset, studio_dataset, label, x, y, width, height)
         select box_id, image_id, :dataset, :studio_dataset, label, x, y, width, height
         from new_box
-        """,
-    ),
-    (
-        # Gold changed the box, and LightlyStudio still holds what the sync wrote.
-        "changed_box_table",
-        f"""
-        create temp table changed_box on commit drop as
-        select staged.* from stage_box staged
-        join {SYNC_SCHEMA}.loaded_box loaded on loaded.box_id = staged.box_id
-        {_STUDIO_BOX_JOINS}
-        where (staged.label, staged.x, staged.y, staged.width, staged.height)
-              is distinct from
-              (loaded.label, loaded.x, loaded.y, loaded.width, loaded.height)
-          and {_STUDIO_EQUALS_LOADED}
-        """,
-    ),
-    (
-        "changed_detections",
-        """
-        update object_detection_annotation detection
-        set x = changed.x, y = changed.y, width = changed.width, height = changed.height
-        from changed_box changed
-        where detection.sample_id = changed.box_id
-        """,
-    ),
-    (
-        "changed_labels",
-        """
-        update annotation_base base
-        set annotation_label_id = stage_label.label_id
-        from changed_box changed
-        join stage_label on stage_label.name = changed.label
-        where base.sample_id = changed.box_id
-        """,
-    ),
-    (
-        "updated_boxes",
-        f"""
-        update {SYNC_SCHEMA}.loaded_box loaded
-        set label = changed.label, x = changed.x, y = changed.y,
-            width = changed.width, height = changed.height
-        from changed_box changed
-        where loaded.box_id = changed.box_id
         """,
     ),
     (
