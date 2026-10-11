@@ -12,6 +12,8 @@ from lakehouse_cv.contract.correction_actions import EVENT_SCHEMA
 from lakehouse_cv.defs import corrections as corrections_defs
 from lakehouse_cv.defs.corrections import (
     build_corrections_asset,
+    build_studio_export_asset,
+    build_studio_export_key,
     read_corrections_manifest,
 )
 from lakehouse_cv.defs.resources import CvLakeResource
@@ -75,6 +77,65 @@ def _read_data_version(result: dg.ExecuteInProcessResult) -> str | None:
     (materialization,) = result.get_asset_materialization_events()
     tags = materialization.materialization.tags or {}
     return tags.get("dagster/data_version")
+
+
+def _observe(lake: CvLakeResource, instance: dg.DagsterInstance) -> str | None:
+    observation_job = dg.define_asset_job(
+        name="observe_export", selection=[build_studio_export_key(DATASET)]
+    )
+    result = (
+        dg.Definitions(
+            assets=[build_studio_export_asset(DATASET)],
+            jobs=[observation_job],
+            resources={"lake": lake},
+        )
+        .resolve_job_def("observe_export")
+        .execute_in_process(instance=instance)
+    )
+    (observation,) = result.get_asset_observation_events()
+    tags = observation.asset_observation_data.asset_observation.tags or {}
+    return tags.get("dagster/data_version")
+
+
+def test_an_observation_with_no_export_url_reports_no_event(
+    lake: CvLakeResource, dagster_instance: dg.DagsterInstance
+) -> None:
+    assert _observe(lake=lake, instance=dagster_instance) == "none"
+
+
+def test_an_observation_of_an_empty_export_reports_no_event(
+    export_lake: CvLakeResource,
+    export_server: FakeExportServer,
+    dagster_instance: dg.DagsterInstance,
+) -> None:
+    assert _observe(lake=export_lake, instance=dagster_instance) == "none"
+
+
+def test_an_observation_reports_the_latest_event_file(
+    export_lake: CvLakeResource,
+    export_server: FakeExportServer,
+    dagster_instance: dg.DagsterInstance,
+) -> None:
+    export_server.publish(dataset=DATASET, rows=[MOVED])
+    latest = export_server.publish(dataset=DATASET, rows=[DELETED])
+
+    assert _observe(lake=export_lake, instance=dagster_instance) == latest
+
+
+def test_the_corrections_record_the_observed_export(
+    export_lake: CvLakeResource,
+    export_server: FakeExportServer,
+    dagster_instance: dg.DagsterInstance,
+) -> None:
+    export_server.publish(dataset=DATASET, rows=[MOVED])
+    observed = _observe(lake=export_lake, instance=dagster_instance)
+
+    result = _materialize(export_lake)
+
+    (materialization,) = result.get_asset_materialization_events()
+    tags = materialization.materialization.tags or {}
+    input_tag = "dagster/input_data_version/lightlystudio/wider_face_export"
+    assert tags.get(input_tag) == observed == _read_data_version(result)
 
 
 def test_a_lake_with_no_export_url_fetches_nothing(lake: CvLakeResource) -> None:
