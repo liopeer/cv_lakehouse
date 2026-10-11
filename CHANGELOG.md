@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.8.0](https://github.com/liopeer/cv_lakehouse/compare/v0.7.0...v0.8.0) (2026-10-11)
+
+
+### Features
+
+* **cv:** add coco, lvis and coco-wholebody, and map every open images person ([#71](https://github.com/liopeer/cv_lakehouse/issues/71)) ([fc3e4c8](https://github.com/liopeer/cv_lakehouse/commit/fc3e4c80dc02922f40b053401fca185088f6cd9d))
+* **cv:** add textocr and hiertext for the text class, and list candidate datasets ([#72](https://github.com/liopeer/cv_lakehouse/issues/72)) ([77181d0](https://github.com/liopeer/cv_lakehouse/commit/77181d0f81d0eefbba8af8bfa9bd629e5ed90aa5))
+* observe the lightlystudio export of each dataset ([#73](https://github.com/liopeer/cv_lakehouse/issues/73)) ([2b56a64](https://github.com/liopeer/cv_lakehouse/commit/2b56a64730958e9d7a54d4d9c92968bf505dce69))
+* show asset kinds and parquet schemas in the dagster ui ([#68](https://github.com/liopeer/cv_lakehouse/issues/68)) ([752ea2f](https://github.com/liopeer/cv_lakehouse/commit/752ea2f884a46ed14f02fa9e0466e50942b6233b))
+
+## [0.7.0](https://github.com/liopeer/cv_lakehouse/compare/v0.6.0...v0.7.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* make every asset a pure function of its inputs ([#67](https://github.com/liopeer/cv_lakehouse/issues/67))
+
+### Features
+
+* make every asset a pure function of its inputs ([#67](https://github.com/liopeer/cv_lakehouse/issues/67)) ([782d5b0](https://github.com/liopeer/cv_lakehouse/commit/782d5b0371e3cf0aced90cd7fb009f4e07c267fd))
+
+
+### Documentation
+
+* **adr:** propose curator edits as bronze events ([#65](https://github.com/liopeer/cv_lakehouse/issues/65)) ([3c41e36](https://github.com/liopeer/cv_lakehouse/commit/3c41e361160116c37b67bd83700d09495c744c67))
+
 ## [0.6.0](https://github.com/liopeer/cv_lakehouse/compare/v0.5.0...v0.6.0) (2026-10-09)
 
 

@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Bring one Studio dataset in step with its slice of gold.
+"""Overwrite one Studio dataset with its slice of gold.
 
-The rule that lets a curator and the lake both write: the sync records every box as it
-last wrote it, in `loaded_box`. A box that differs from its record, or that is gone,
-belongs to the curator, and the sync never writes it again. Every other box follows
-gold.
+Every run writes every image and every box of gold, by the ids of gold. A row that
+exists is updated in place, so a rerun changes nothing. The lake owns the annotations,
+so a box that gold does not hold is deleted. The sync keeps no record of what it wrote.
+
+An edit of a curator wins until gold holds it. The triggers of `sync_state` log every
+edit, and the sync leaves a box that has an edit after the last one that gold holds.
 """
 
 from __future__ import annotations
@@ -17,17 +19,15 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
-from uuid import UUID
 
 import pyarrow as pa
-from lightly_studio.resolvers import annotation_resolver
 from sqlalchemy import CursorResult, text
 from sqlmodel import Session
 
 from cv_lakehouse_studio.gold_client import (
+    EventMarker,
     GoldClient,
     GoldDataset,
-    GoldMeta,
     GoldSlice,
 )
 from cv_lakehouse_studio.scaffolding import (
@@ -36,6 +36,7 @@ from cv_lakehouse_studio.scaffolding import (
     get_or_create_default_embedding_model,
 )
 from cv_lakehouse_studio.staging import (
+    create_embedding_staging_table,
     create_staging_tables,
     stage_boxes,
     stage_embeddings,
@@ -43,13 +44,16 @@ from cv_lakehouse_studio.staging import (
     stage_names,
 )
 from cv_lakehouse_studio.studio_datasets import StudioDataset
-from cv_lakehouse_studio.sync_state import SYNC_SCHEMA
-
-# The `origin` that gold gives a box that a curator drew.
-STUDIO_ORIGIN = "studio"
+from cv_lakehouse_studio.sync_state import (
+    GOLD_LOG_SEQUENCE_SETTING,
+    ORIGIN_SETTING,
+    SYNC_ORIGIN,
+    SYNC_SCHEMA,
+    read_chain_id,
+)
 
 # The largest statement of a healthy first sync runs for minutes. A bad plan runs for
-# hours, and it holds the lock that the export waits for.
+# hours.
 DEFAULT_STATEMENT_TIMEOUT_SECONDS = 1800.0
 
 
@@ -63,24 +67,19 @@ class SyncReport:
     num_embeddings: int
 
 
-def read_synced_gold(
-    session: Session, studio_dataset: str
-) -> tuple[int, datetime] | None:
-    """Return the gold version and build time that this dataset was last synced to."""
-    row = session.execute(
-        text(
-            f"select gold_version, gold_built_at from {SYNC_SCHEMA}.synced_dataset "
-            "where studio_dataset = :studio_dataset"
-        ),
-        {"studio_dataset": studio_dataset},
-    ).one_or_none()
-    return None if row is None else (row[0], row[1])
+def find_gold_log_sequence(session: Session, last_event: EventMarker | None) -> int:
+    """Return the last log entry of this database that gold holds, or 0 for none.
+
+    Gold of another database holds no edit of this one.
+    """
+    if last_event is None or last_event.chain_id != read_chain_id(session):
+        return 0
+    return last_event.log_sequence
 
 
 def sync_dataset(
     *,
     client: GoldClient,
-    meta: GoldMeta,
     dataset: GoldDataset,
     studio_dataset: StudioDataset,
     class_names: Sequence[str],
@@ -94,6 +93,8 @@ def sync_dataset(
         for split in dataset.splits
         if gold_slice.split is None or split.split == gold_slice.split
     ]
+    # The resolvers commit, and a commit drops the staging tables, so every resolver
+    # call comes before the first staging statement.
     scaffold = get_or_create_dataset_scaffold(
         dataset=name,
         class_names=class_names,
@@ -103,138 +104,155 @@ def sync_dataset(
         ),
     )
     session = scaffold.session
-    synced = read_synced_gold(session=session, studio_dataset=name)
-
-    # The first page tells the dimension, which the model row needs. The resolvers
-    # commit, and a commit drops the staging tables, so every resolver call comes
-    # before the first staging statement.
-    embedding_pages = _iter_embedding_pages(
-        client=client,
-        dataset=dataset,
-        gold_slice=gold_slice,
-        changed_since=None if synced is None else synced[1],
-    )
-    first_embedding_page = next(embedding_pages, None)
-    embedding_model_id = _get_or_create_embedding_model(
-        scaffold=scaffold, dataset=dataset, first_page=first_embedding_page
+    gold_log_sequence = find_gold_log_sequence(
+        session=session, last_event=dataset.last_event
     )
 
+    _begin_sync_transaction(
+        session=session,
+        statement_timeout_seconds=statement_timeout_seconds,
+        gold_log_sequence=gold_log_sequence,
+    )
     create_staging_tables(session)
-    # The setting ends with the transaction.
-    session.execute(
-        text("select set_config('statement_timeout', :timeout, true)"),
-        {"timeout": f"{statement_timeout_seconds * 1000:.0f}"},
-    )
     stage_names(session=session, table="stage_label", ids=scaffold.label_ids)
     stage_names(session=session, table="stage_tag", ids=scaffold.tag_ids)
     for page in client.iter_pages(table="images", gold_slice=gold_slice):
         stage_images(session=session, page=page)
     for page in client.iter_pages(table="boxes", gold_slice=gold_slice):
         stage_boxes(session=session, page=page)
-    if first_embedding_page is not None:
-        embedding_pages = itertools.chain([first_embedding_page], embedding_pages)
-    for ids, page in embedding_pages:
-        stage_embeddings(session=session, ids=ids, page=page)
     # Autovacuum never analyzes a temp table. Without statistics, the planner guesses
     # the size of each staging table.
-    session.execute(
-        text("analyze stage_label, stage_tag, stage_image, stage_box, stage_embedding")
-    )
+    session.execute(text("analyze stage_label, stage_tag, stage_image, stage_box"))
 
     parameters = {
         "dataset": dataset.dataset,
-        "studio_dataset": name,
         "image_base": image_base.rstrip("/"),
         "collection": scaffold.collection_id,
         "annotations": scaffold.annotation_collection_id,
-        "model": embedding_model_id,
         "now": datetime.now(tz=UTC).replace(tzinfo=None),
-        "gold_version": meta.version,
-        "gold_built_at": meta.built_at,
+        "model_name": dataset.embedding_model,
+        "dataset_id": scaffold.dataset_id,
     }
     counts = {
         key: cast(CursorResult, session.execute(text(statement), parameters)).rowcount
         for key, statement in _MERGE_STATEMENTS
     }
-    removed_box_ids = [
-        row[0] for row in session.execute(text(_REMOVED_BOX_QUERY), parameters)
-    ]
+    lacks_vectors = (
+        dataset.embedding_model is not None
+        and session.execute(text(_LACKS_VECTORS_QUERY), parameters).scalar_one()
+    )
     session.commit()
 
-    _delete_boxes(session=session, box_ids=removed_box_ids)
+    num_embeddings = (
+        _load_vectors(
+            client=client,
+            scaffold=scaffold,
+            dataset=dataset,
+            gold_slice=gold_slice,
+            statement_timeout_seconds=statement_timeout_seconds,
+            gold_log_sequence=gold_log_sequence,
+        )
+        if lacks_vectors
+        else 0
+    )
     return SyncReport(
         studio_dataset=name,
         num_images=counts["images"],
         num_new_boxes=counts["new_boxes"],
-        num_updated_boxes=counts["updated_boxes"],
-        num_removed_boxes=len(removed_box_ids),
-        num_embeddings=counts["embeddings"],
+        num_updated_boxes=counts["changed_box_table"],
+        num_removed_boxes=counts["removed_box_samples"],
+        num_embeddings=num_embeddings,
     )
 
 
-def _iter_embedding_pages(
+def _begin_sync_transaction(
+    *, session: Session, statement_timeout_seconds: float, gold_log_sequence: int
+) -> None:
+    """Mark the transaction as the sync. The settings end with the transaction."""
+    session.execute(
+        text(
+            "select set_config('statement_timeout', :timeout, true), "
+            "set_config(:origin_setting, :origin, true), "
+            "set_config(:gold_setting, :gold_log_sequence, true)"
+        ),
+        {
+            "timeout": f"{statement_timeout_seconds * 1000:.0f}",
+            "origin_setting": ORIGIN_SETTING,
+            "origin": SYNC_ORIGIN,
+            "gold_setting": GOLD_LOG_SEQUENCE_SETTING,
+            "gold_log_sequence": str(gold_log_sequence),
+        },
+    )
+
+
+def _load_vectors(
     *,
     client: GoldClient,
+    scaffold: DatasetScaffold,
     dataset: GoldDataset,
     gold_slice: GoldSlice,
-    changed_since: datetime | None,
+    statement_timeout_seconds: float,
+    gold_log_sequence: int,
+) -> int:
+    """Load every vector of the slice, and return how many samples took one.
+
+    The sync runs this only when a sample lacks a vector, as it reads every vector of
+    the slice. A vector replaces the one in place.
+    """
+    pages = _iter_embedding_pages(client=client, gold_slice=gold_slice)
+    first_page = next(pages, None)
+    if first_page is None or dataset.embedding_model is None:
+        return 0
+    # The first page tells the dimension, which the model row needs. The resolver
+    # commits, so it comes before the staging table.
+    model_id = get_or_create_default_embedding_model(
+        scaffold=scaffold,
+        name=dataset.embedding_model,
+        dimension=len(first_page[1].column("embedding")[0]),
+    )
+    session = scaffold.session
+    _begin_sync_transaction(
+        session=session,
+        statement_timeout_seconds=statement_timeout_seconds,
+        gold_log_sequence=gold_log_sequence,
+    )
+    create_embedding_staging_table(session)
+    for ids, page in itertools.chain([first_page], pages):
+        stage_embeddings(session=session, ids=ids, page=page)
+    session.execute(text("analyze stage_embedding"))
+    count = cast(
+        CursorResult,
+        session.execute(
+            text(_LOAD_VECTORS_STATEMENT),
+            {"model": model_id, "gold_log_sequence": gold_log_sequence},
+        ),
+    ).rowcount
+    session.commit()
+    return count
+
+
+def _iter_embedding_pages(
+    *, client: GoldClient, gold_slice: GoldSlice
 ) -> Iterator[tuple[list[str], pa.Table]]:
     """Yield the ids and the page of every page that holds a vector.
 
     An image id and a box id are both the id of a LightlyStudio sample, so the two
     tables go into one staging table.
     """
-    if dataset.embedding_model is None:
-        return
     for table, key in (("embeddings", "image_id"), ("crop_embeddings", "box_id")):
-        for page in client.iter_pages(
-            table=table, gold_slice=gold_slice, changed_since=changed_since
-        ):
+        for page in client.iter_pages(table=table, gold_slice=gold_slice):
             if page.num_rows:
                 yield page.column(key).to_pylist(), page
 
 
-def _get_or_create_embedding_model(
-    *,
-    scaffold: DatasetScaffold,
-    dataset: GoldDataset,
-    first_page: tuple[list[str], pa.Table] | None,
-) -> UUID | None:
-    if first_page is None or dataset.embedding_model is None:
-        return None
-    return get_or_create_default_embedding_model(
-        scaffold=scaffold,
-        name=dataset.embedding_model,
-        dimension=len(first_page[1].column("embedding")[0]),
-    )
-
-
-def _delete_boxes(session: Session, box_ids: Sequence[UUID]) -> None:
-    """Delete the boxes that gold dropped, and that no curator touched.
-
-    The resolver also removes what hangs on an annotation, such as its tags and its
-    evaluation results. A box leaves gold seldom, so one call per box is cheap enough.
-    """
-    for box_id in box_ids:
-        annotation_resolver.delete_annotation(session=session, annotation_id=box_id)
-        session.execute(
-            text(f"delete from {SYNC_SCHEMA}.loaded_box where box_id = :box_id"),
-            {"box_id": box_id},
-        )
-    session.commit()
-
-
-# LightlyStudio as it is now equals the record of the last write.
-_STUDIO_EQUALS_LOADED = """
-(label.annotation_label_name, detection.x, detection.y, detection.width,
- detection.height)
-is not distinct from (loaded.label, loaded.x, loaded.y, loaded.width, loaded.height)
-"""
-
-_STUDIO_BOX_JOINS = """
-join annotation_base base on base.sample_id = loaded.box_id
-join object_detection_annotation detection on detection.sample_id = loaded.box_id
-join annotation_label label on label.annotation_label_id = base.annotation_label_id
+# A box with a log entry after the last one that gold holds. A curator edited it, and
+# gold does not hold the edit yet.
+_LATER_EDIT = f"""
+exists (
+    select from {SYNC_SCHEMA}.edit_log edit
+    where edit.sample_id = {{box_id}}
+      and edit.sequence > current_setting('{GOLD_LOG_SEQUENCE_SETTING}')::bigint
+)
 """
 
 # Each statement with the count that the report takes from it. They run in this order,
@@ -270,6 +288,8 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         """,
     ),
     (
+        # The lake writes its own tags. A tag that a curator changes stays in
+        # LightlyStudio, and the lake never reads it.
         "image_tags",
         """
         insert into sampletaglinktable (sample_id, tag_id)
@@ -299,20 +319,25 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         """,
     ),
     (
-        # Gold changed the box, and LightlyStudio still holds what the sync wrote. The
-        # changes run before the new boxes, so that this join never visits a box that
-        # this run inserts.
+        # A box that LightlyStudio holds with another label or another geometry.
         "changed_box_table",
         f"""
         create temp table changed_box on commit drop as
-        select staged.* from stage_box staged
-        join {SYNC_SCHEMA}.loaded_box loaded on loaded.box_id = staged.box_id
-        {_STUDIO_BOX_JOINS}
-        where loaded.studio_dataset = :studio_dataset
-          and (staged.label, staged.x, staged.y, staged.width, staged.height)
+        select staged.*,
+               (detection.x, detection.y, detection.width, detection.height)
+                   is distinct from (staged.x, staged.y, staged.width, staged.height)
+                   as is_moved
+        from stage_box staged
+        join annotation_base base on base.sample_id = staged.box_id
+        join object_detection_annotation detection
+            on detection.sample_id = staged.box_id
+        join annotation_label label
+            on label.annotation_label_id = base.annotation_label_id
+        where (label.annotation_label_name, detection.x, detection.y, detection.width,
+               detection.height)
               is distinct from
-              (loaded.label, loaded.x, loaded.y, loaded.width, loaded.height)
-          and {_STUDIO_EQUALS_LOADED}
+              (staged.label, staged.x, staged.y, staged.width, staged.height)
+          and not {_LATER_EDIT.format(box_id="staged.box_id")}
         """,
     ),
     (
@@ -321,7 +346,15 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         update object_detection_annotation detection
         set x = changed.x, y = changed.y, width = changed.width, height = changed.height
         from changed_box changed
-        where detection.sample_id = changed.box_id
+        where detection.sample_id = changed.box_id and changed.is_moved
+        """,
+    ),
+    (
+        # The vector of a moved box shows the old crop. The sync loads the new one.
+        "moved_vectors",
+        """
+        delete from sample_embedding
+        where sample_id in (select box_id from changed_box where is_moved)
         """,
     ),
     (
@@ -332,28 +365,19 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         from changed_box changed
         join stage_label on stage_label.name = changed.label
         where base.sample_id = changed.box_id
+          and base.annotation_label_id <> stage_label.label_id
         """,
     ),
     (
-        "updated_boxes",
-        f"""
-        update {SYNC_SCHEMA}.loaded_box loaded
-        set label = changed.label, x = changed.x, y = changed.y,
-            width = changed.width, height = changed.height
-        from changed_box changed
-        where loaded.box_id = changed.box_id
-        """,
-    ),
-    (
-        # A box that a curator drew comes back from gold under the id that
-        # LightlyStudio gave it. It stays the curator's: the sync neither inserts it
-        # nor records it, so the export keeps it as a correction.
+        # A box that a curator deleted, and that gold still holds, stays deleted.
         "new_box_table",
         f"""
         create temp table new_box on commit drop as
         select staged.* from stage_box staged
-        left join {SYNC_SCHEMA}.loaded_box loaded on loaded.box_id = staged.box_id
-        where loaded.box_id is null and staged.origin <> '{STUDIO_ORIGIN}'
+        where not exists (
+                select from annotation_base base where base.sample_id = staged.box_id
+            )
+          and not {_LATER_EDIT.format(box_id="staged.box_id")}
         """,
     ),
     (
@@ -365,7 +389,7 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         """,
     ),
     (
-        "box_annotations",
+        "new_boxes",
         """
         insert into annotation_base
             (created_at, sample_id, annotation_type, annotation_label_id, confidence,
@@ -386,46 +410,124 @@ _MERGE_STATEMENTS: tuple[tuple[str, str], ...] = (
         """,
     ),
     (
-        "new_boxes",
+        # A box on an image of the slice that gold does not hold, and that no curator
+        # edited after gold.
+        "removed_box_table",
         f"""
-        insert into {SYNC_SCHEMA}.loaded_box
-            (box_id, image_id, dataset, studio_dataset, label, x, y, width, height)
-        select box_id, image_id, :dataset, :studio_dataset, label, x, y, width, height
-        from new_box
+        create temp table removed_box on commit drop as
+        select base.sample_id as box_id, base.parent_sample_id as image_id
+        from annotation_base base
+        join object_detection_annotation detection using (sample_id)
+        join stage_image image on image.image_id = base.parent_sample_id
+        where not exists (
+                select from stage_box staged where staged.box_id = base.sample_id
+            )
+          and not {_LATER_EDIT.format(box_id="base.sample_id")}
         """,
     ),
     (
-        # A vector of the lake replaces the one in place. A sample that LightlyStudio
-        # does not hold, such as a box that a curator deleted, gets none.
-        "embeddings",
+        # The evaluation results of a box go with it, as LightlyStudio removes them.
+        "removed_evaluation_runs",
         """
-        insert into sample_embedding (sample_id, embedding_model_id, embedding)
-        select staged.sample_id, :model, staged.embedding
-        from stage_embedding staged
-        join sample on sample.sample_id = staged.sample_id
-        on conflict (sample_id, embedding_model_id) do update
-            set embedding = excluded.embedding
+        create temp table removed_evaluation_run on commit drop as
+        select distinct evaluation_run_id from evaluation_annotation_metric
+        where pred_annotation_id in (select box_id from removed_box)
+           or gt_annotation_id in (select box_id from removed_box)
         """,
     ),
     (
-        "synced_dataset",
-        f"""
-        insert into {SYNC_SCHEMA}.synced_dataset
-            (studio_dataset, gold_version, gold_built_at)
-        values (:studio_dataset, :gold_version, :gold_built_at)
-        on conflict (studio_dataset) do update
-            set gold_version = excluded.gold_version,
-                gold_built_at = excluded.gold_built_at
+        "removed_annotation_metrics",
+        """
+        delete from evaluation_annotation_metric
+        where pred_annotation_id in (select box_id from removed_box)
+           or gt_annotation_id in (select box_id from removed_box)
+        """,
+    ),
+    (
+        "removed_sample_metrics",
+        """
+        delete from evaluation_sample_metric
+        where evaluation_run_id in (
+                select evaluation_run_id from removed_evaluation_run
+            )
+          and sample_id in (select image_id from removed_box)
+        """,
+    ),
+    (
+        "removed_detections",
+        """
+        delete from object_detection_annotation
+        where sample_id in (select box_id from removed_box)
+        """,
+    ),
+    (
+        # The guard of `sync_state` keeps a box that a curator edited meanwhile. The
+        # rest of the deletion follows the boxes that went.
+        "removed_annotations",
+        """
+        with removed as (
+            delete from annotation_base
+            where sample_id in (select box_id from removed_box)
+            returning sample_id
+        )
+        delete from removed_box
+        where box_id not in (select sample_id from removed)
+        """,
+    ),
+    (
+        "removed_box_tags",
+        """
+        delete from sampletaglinktable
+        where sample_id in (select box_id from removed_box)
+        """,
+    ),
+    (
+        "removed_box_vectors",
+        """
+        delete from sample_embedding
+        where sample_id in (select box_id from removed_box)
+        """,
+    ),
+    (
+        "removed_box_samples",
+        """
+        delete from sample where sample_id in (select box_id from removed_box)
         """,
     ),
 )
 
-# Gold dropped the box, and LightlyStudio still holds what the sync wrote.
-_REMOVED_BOX_QUERY = f"""
-select loaded.box_id from {SYNC_SCHEMA}.loaded_box loaded
-left join stage_box staged on staged.box_id = loaded.box_id
-{_STUDIO_BOX_JOINS}
-where loaded.studio_dataset = :studio_dataset
-  and staged.box_id is null
-  and {_STUDIO_EQUALS_LOADED}
+# A sample of the slice that LightlyStudio holds, with no vector of the gold model.
+_LACKS_VECTORS_QUERY = """
+select exists (
+    select from (
+        select image_id as sample_id from stage_image
+        union all
+        select box_id from stage_box
+    ) staged
+    join sample on sample.sample_id = staged.sample_id
+    where not exists (
+        select from sample_embedding embedding
+        join embedding_model model using (embedding_model_id)
+        where embedding.sample_id = staged.sample_id
+          and model.name = :model_name
+          and model.dataset_id = :dataset_id
+    )
+)
+"""
+
+# A vector of the lake replaces the one in place. A sample that LightlyStudio does not
+# hold, such as a box that a curator deleted, gets none. Nor does a box that a curator
+# edited after gold: its vector shows the crop of gold.
+_LOAD_VECTORS_STATEMENT = f"""
+insert into sample_embedding (sample_id, embedding_model_id, embedding)
+select staged.sample_id, :model, staged.embedding
+from stage_embedding staged
+join sample on sample.sample_id = staged.sample_id
+where not exists (
+    select from {SYNC_SCHEMA}.edit_log edit
+    where edit.sample_id = staged.sample_id
+      and edit.sequence > :gold_log_sequence
+)
+on conflict (sample_id, embedding_model_id) do update
+    set embedding = excluded.embedding
 """

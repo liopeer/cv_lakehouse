@@ -56,7 +56,7 @@ class _BatchWriter:
 
 def write_split(
     *,
-    silver_dir: UPath,
+    build_dir: UPath,
     dataset: str,
     split: str,
     images: Iterable[SilverImage],
@@ -67,10 +67,10 @@ def write_split(
     split from an empty one.
     """
     image_writer = _BatchWriter(
-        path=images_file(silver_dir=silver_dir, split=split), schema=IMAGE_SCHEMA
+        path=images_file(build_dir=build_dir, split=split), schema=IMAGE_SCHEMA
     )
     box_writer = _BatchWriter(
-        path=boxes_file(silver_dir=silver_dir, split=split), schema=BOX_SCHEMA
+        path=boxes_file(build_dir=build_dir, split=split), schema=BOX_SCHEMA
     )
     try:
         for image in images:

@@ -11,8 +11,11 @@ from datetime import UTC, datetime
 
 import dagster as dg
 
+from lakehouse_core.column_schemas import build_table_schema_metadata
+from lakehouse_cv.contract.gold_tables import STORED_GOLD_TABLES
 from lakehouse_cv.defs.gold import GOLD_KEY
 from lakehouse_cv.defs.resources import CvLakeResource
+from lakehouse_cv.defs.upstream_builds import read_upstream_build_id
 from lakehouse_cv.transforms.gold_release import (
     IdenticalReleaseError,
     find_changed_release_files,
@@ -28,24 +31,30 @@ def build_eval_release_asset() -> dg.AssetsDefinition:
         key=EVAL_RELEASE_KEY,
         deps=[GOLD_KEY],
         group_name="gold",
-        kinds={"file"},
+        kinds={"gold", "parquet"},
         description=(
             "A frozen copy of the val and test rows of gold. Every run publishes the "
             "next number, and no run changes an earlier one. Run it by hand, when a "
             "round of corrections is done."
         ),
+        metadata=build_table_schema_metadata(STORED_GOLD_TABLES),
     )
-    def _eval_release(lake: CvLakeResource) -> dg.MaterializeResult:
+    def _eval_release(
+        context: dg.AssetExecutionContext, lake: CvLakeResource
+    ) -> dg.MaterializeResult:
         try:
             manifest = write_eval_release(
-                paths=lake.paths, created_at=datetime.now(tz=UTC)
+                paths=lake.paths,
+                gold_build_id=read_upstream_build_id(context=context, key=GOLD_KEY),
+                created_at=datetime.now(tz=UTC),
             )
         except IdenticalReleaseError as error:
             raise dg.Failure(description=str(error)) from error
         return dg.MaterializeResult(
             metadata={
                 "release": manifest.release,
-                "gold_version": manifest.gold_version,
+                "gold_build_id": manifest.gold_build_id,
+                "gold_code_version": manifest.gold_code_version,
                 "datasets": [dataset.dataset for dataset in manifest.datasets],
                 "num_files": len(manifest.files),
             }

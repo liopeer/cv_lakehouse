@@ -8,6 +8,8 @@ Each copy has the layout of a real download, archives left out as a link allows.
 required path that holds no test data is an empty stand-in, so each copy is complete.
 """
 
+import gzip
+import json
 from pathlib import Path
 
 from PIL import Image as PILImage
@@ -101,6 +103,266 @@ def make_wider_face(root: Path) -> UPath:
     return UPath(complete_with_stand_ins(root=root, name="wider_face"))
 
 
+def make_coco(root: Path) -> UPath:
+    """COCO, with a crowd box, a cat and an image without a box."""
+    _image(path=root / "train2017" / "000000000001.jpg", size=(100, 80))
+    _image(path=root / "train2017" / "000000000002.jpg", size=(60, 60))
+    _image(path=root / "val2017" / "000000000003.jpg", size=(50, 50))
+    annotations = root / "annotations_trainval2017" / "annotations"
+    annotations.mkdir(parents=True)
+    categories = [{"id": 1, "name": "person"}, {"id": 17, "name": "cat"}]
+    train = {
+        "images": [
+            {"id": 1, "file_name": "000000000001.jpg", "width": 100, "height": 80},
+            {"id": 2, "file_name": "000000000002.jpg", "width": 60, "height": 60},
+        ],
+        "annotations": [
+            _coco_box(box_id=10, image_id=1, category_id=1, bbox=[10, 20, 30, 40]),
+            _coco_box(box_id=11, image_id=1, category_id=17, bbox=[0, 0, 5, 5]),
+            _coco_box(
+                box_id=12, image_id=1, category_id=1, bbox=[0, 0, 100, 80], iscrowd=1
+            ),
+        ],
+        "categories": categories,
+    }
+    val = {
+        "images": [
+            {"id": 3, "file_name": "000000000003.jpg", "width": 50, "height": 50}
+        ],
+        "annotations": [
+            _coco_box(box_id=13, image_id=3, category_id=1, bbox=[5, 5, 20, 20])
+        ],
+        "categories": categories,
+    }
+    (annotations / "instances_train2017.json").write_text(json.dumps(train))
+    (annotations / "instances_val2017.json").write_text(json.dumps(val))
+    return UPath(complete_with_stand_ins(root=root, name="coco"))
+
+
+def make_lvis(root: Path) -> UPath:
+    """LVIS on the images of the COCO fixture. Its val split takes a train2017 image."""
+    categories = [{"id": 642, "name": "license_plate"}, {"id": 793, "name": "person"}]
+    train = {
+        "images": [_lvis_image(image_id=1, folder="train2017", size=(100, 80))],
+        "annotations": [
+            _lvis_box(box_id=1, image_id=1, category_id=642, bbox=[50, 50, 20, 10]),
+            _lvis_box(box_id=2, image_id=1, category_id=793, bbox=[10, 20, 30, 40]),
+        ],
+        "categories": categories,
+    }
+    val = {
+        "images": [_lvis_image(image_id=2, folder="train2017", size=(60, 60))],
+        "annotations": [],
+        "categories": categories,
+    }
+    for split, content in (("train", train), ("val", val)):
+        folder = root / f"lvis_v1_{split}.json"
+        folder.mkdir(parents=True)
+        (folder / f"lvis_v1_{split}.json").write_text(json.dumps(content))
+    return UPath(complete_with_stand_ins(root=root, name="lvis"))
+
+
+def make_coco_wholebody(root: Path) -> UPath:
+    """COCO-WholeBody on the COCO fixture: one face, one face that is not annotated."""
+    root.mkdir(parents=True, exist_ok=True)
+    train = {
+        "images": [
+            _coco_wholebody_image(image_id=1, folder="train2017", size=(100, 80))
+        ],
+        "annotations": [
+            _coco_box(box_id=10, image_id=1, category_id=1, bbox=[10, 20, 30, 40])
+            | _parts(face_box=[15, 22, 8, 8], face_valid=True),
+            _coco_box(box_id=12, image_id=1, category_id=1, bbox=[60, 5, 30, 40])
+            | _parts(face_box=[0, 0, 0, 0], face_valid=False),
+        ],
+        "categories": [{"id": 1, "name": "person"}],
+    }
+    val = {
+        "images": [_coco_wholebody_image(image_id=3, folder="val2017", size=(50, 50))],
+        "annotations": [],
+        "categories": [{"id": 1, "name": "person"}],
+    }
+    (root / "coco_wholebody_train_v1.0.json").write_text(json.dumps(train))
+    (root / "coco_wholebody_val_v1.0.json").write_text(json.dumps(val))
+    return UPath(complete_with_stand_ins(root=root, name="coco_wholebody"))
+
+
+def make_textocr(root: Path) -> UPath:
+    """TextOCR, with a word that no one can read and an image without a word."""
+    images = root / "train_val_images" / "train_images"
+    for image_id in ("aaa", "bbb", "ccc"):
+        _image(path=images / f"{image_id}.jpg", size=(100, 50))
+    train = {
+        "imgs": {
+            image_id: _textocr_image(image_id=image_id) for image_id in ("aaa", "bbb")
+        },
+        "anns": {
+            "aaa_1": _textocr_word(image_id="aaa", bbox=[10, 10, 20, 10], text="HI"),
+            "aaa_2": _textocr_word(image_id="aaa", bbox=[40, 10, 20, 10], text="."),
+        },
+        "imgToAnns": {"aaa": ["aaa_1", "aaa_2"], "bbb": []},
+    }
+    val = {
+        "imgs": {"ccc": _textocr_image(image_id="ccc")},
+        "anns": {},
+        "imgToAnns": {"ccc": []},
+    }
+    (root / "TextOCR_0.1_train.json").write_text(json.dumps(train))
+    (root / "TextOCR_0.1_val.json").write_text(json.dumps(val))
+    return UPath(complete_with_stand_ins(root=root, name="textocr"))
+
+
+def _textocr_image(*, image_id: str) -> dict[str, object]:
+    """Every image names a file in train/, also an image of the val split."""
+    return {
+        "id": image_id,
+        "width": 100,
+        "height": 50,
+        "set": "train",
+        "file_name": f"train/{image_id}.jpg",
+    }
+
+
+def _textocr_word(*, image_id: str, bbox: list[int], text: str) -> dict[str, object]:
+    return {
+        "id": f"{image_id}_{bbox[0]}",
+        "image_id": image_id,
+        "bbox": bbox,
+        "utf8_string": text,
+        "points": [0, 0, 1, 0, 1, 1, 0, 1],
+        "area": bbox[2] * bbox[3],
+    }
+
+
+def make_hiertext(root: Path) -> UPath:
+    """HierText. One train line holds a printed word and a word that no one can read."""
+    train_words = [
+        _hiertext_word(vertices=[[10, 10], [30, 12], [30, 20], [10, 18]]),
+        _hiertext_word(
+            vertices=[[40, 10], [60, 10], [60, 20], [40, 20]],
+            legible=False,
+            handwritten=True,
+        ),
+    ]
+    annotations = {
+        "train": [_hiertext_image(image_id="ddd", words=train_words)],
+        "validation": [{**_hiertext_image(image_id="eee", words=[]), "paragraphs": []}],
+        "test": [
+            _hiertext_image(
+                image_id="fff",
+                words=[
+                    _hiertext_word(
+                        vertices=[[5, 5], [15, 5], [15, 40], [5, 40]], vertical=True
+                    )
+                ],
+            )
+        ],
+    }
+    gt = root / "gt"
+    gt.mkdir(parents=True)
+    for split, images in annotations.items():
+        _image(path=root / split / f"{images[0]['image_id']}.jpg", size=(80, 60))
+        with gzip.open(gt / f"{split}.jsonl.gz", mode="wt") as handle:
+            json.dump({"info": {"version": "v1.0"}, "annotations": images}, handle)
+    return UPath(complete_with_stand_ins(root=root, name="hiertext"))
+
+
+def _hiertext_image(
+    *, image_id: str, words: list[dict[str, object]]
+) -> dict[str, object]:
+    line = {"vertices": [], "legible": True, "words": words}
+    return {
+        "image_id": image_id,
+        "image_width": 80,
+        "image_height": 60,
+        "paragraphs": [{"vertices": [], "legible": True, "lines": [line]}],
+    }
+
+
+def _hiertext_word(
+    *,
+    vertices: list[list[int]],
+    legible: bool = True,
+    handwritten: bool = False,
+    vertical: bool = False,
+) -> dict[str, object]:
+    return {
+        "vertices": vertices,
+        "text": "word",
+        "legible": legible,
+        "handwritten": handwritten,
+        "vertical": vertical,
+    }
+
+
+def _coco_url(*, image_id: int, folder: str) -> str:
+    return f"http://images.cocodataset.org/{folder}/{image_id:012d}.jpg"
+
+
+def _lvis_image(
+    *, image_id: int, folder: str, size: tuple[int, int]
+) -> dict[str, object]:
+    """An LVIS image names no file, only its COCO URL."""
+    return {
+        "id": image_id,
+        "coco_url": _coco_url(image_id=image_id, folder=folder),
+        "width": size[0],
+        "height": size[1],
+        "neg_category_ids": [],
+        "not_exhaustive_category_ids": [],
+    }
+
+
+def _coco_wholebody_image(
+    *, image_id: int, folder: str, size: tuple[int, int]
+) -> dict[str, object]:
+    return {
+        "id": image_id,
+        "file_name": f"{image_id:012d}.jpg",
+        "coco_url": _coco_url(image_id=image_id, folder=folder),
+        "width": size[0],
+        "height": size[1],
+    }
+
+
+def _lvis_box(
+    *, box_id: int, image_id: int, category_id: int, bbox: list[int]
+) -> dict[str, object]:
+    return {
+        "id": box_id,
+        "image_id": image_id,
+        "category_id": category_id,
+        "bbox": bbox,
+        "segmentation": [[0, 0, 1, 0, 1, 1]],
+    }
+
+
+def _parts(*, face_box: list[int], face_valid: bool) -> dict[str, object]:
+    """The part boxes of one person. The hands are never annotated here."""
+    return {
+        "face_box": face_box,
+        "face_valid": face_valid,
+        "lefthand_box": [0, 0, 0, 0],
+        "lefthand_valid": False,
+        "righthand_box": [0, 0, 0, 0],
+        "righthand_valid": False,
+        "keypoints": [0] * 51,
+    }
+
+
+def _coco_box(
+    *, box_id: int, image_id: int, category_id: int, bbox: list[int], iscrowd: int = 0
+) -> dict[str, object]:
+    return {
+        "id": box_id,
+        "image_id": image_id,
+        "category_id": category_id,
+        "bbox": bbox,
+        "iscrowd": iscrowd,
+        "segmentation": [[0, 0, 1, 0, 1, 1]],
+    }
+
+
 def make_open_images(root: Path) -> UPath:
     """Open Images. Bronze keeps every class, so the CSV holds a non PII row too."""
     root.mkdir(parents=True, exist_ok=True)
@@ -159,6 +421,11 @@ BUILDERS = {
     "open_images": make_open_images,
     "wider_face": make_wider_face,
     "pp4av": make_pp4av,
+    "coco": make_coco,
+    "lvis": make_lvis,
+    "coco_wholebody": make_coco_wholebody,
+    "textocr": make_textocr,
+    "hiertext": make_hiertext,
 }
 
 

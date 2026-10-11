@@ -8,13 +8,27 @@ from __future__ import annotations
 
 from lakehouse_cv.contract.dataset_spec import DatasetSpec
 from lakehouse_cv.sources.base import BronzeSource
+from lakehouse_cv.sources.coco import CocoSource
+from lakehouse_cv.sources.coco_wholebody import CocoWholeBodySource
+from lakehouse_cv.sources.hiertext import HierTextSource
+from lakehouse_cv.sources.lvis import LvisSource
 from lakehouse_cv.sources.open_images import OpenImagesSource
 from lakehouse_cv.sources.pp4av import PP4AVSource
+from lakehouse_cv.sources.textocr import TextOcrSource
 from lakehouse_cv.sources.wider_face import WiderFaceSource
 
 SOURCE_BY_NAME: dict[str, BronzeSource] = {
     source.spec.name: source
-    for source in (OpenImagesSource(), WiderFaceSource(), PP4AVSource())
+    for source in (
+        OpenImagesSource(),
+        WiderFaceSource(),
+        PP4AVSource(),
+        CocoSource(),
+        LvisSource(),
+        CocoWholeBodySource(),
+        TextOcrSource(),
+        HierTextSource(),
+    )
 }
 
 SPEC_BY_NAME: dict[str, DatasetSpec] = {

@@ -44,11 +44,17 @@ from lakehouse_cv.sources.open_images_files import OPEN_IMAGES_FILES
 # Open Images labels a box with a Freebase id. These are the ids the class registry
 # names.
 # Every other class falls to the default, so bronze keeps it and silver keeps the box.
+# An annotator labels a box with the most specific class, so a person is often a Man,
+# a Woman, a Boy or a Girl. bbox_labels_600_hierarchy.json puts these four under Person.
 FREEBASE_MID_TO_CLASS_NAME = {
     "/m/0dzct": "face",
     "/m/01jfm_": "license_plate",
     "/m/04hgtk": "head",
     "/m/01g317": "person",
+    "/m/04yx4": "person",
+    "/m/03bt1vf": "person",
+    "/m/01bl7v": "person",
+    "/m/05r655": "person",
 }
 
 

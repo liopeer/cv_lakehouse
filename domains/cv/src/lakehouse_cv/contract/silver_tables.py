@@ -8,9 +8,10 @@ Two files per split. One row per image, and one row per box that joins back to i
 `(dataset, split, file_name)`. A row per box alone would lose an image that carries no
 box, and a detector needs those negatives.
 
-Two more files hold the MobileCLIP embeddings, one per image and one per box crop.
-They are separate files because a vector is 2 KB next to a box row of a few dozen
-bytes, and most queries over silver want the boxes and not the vectors.
+The asset `silver/<dataset>_embeddings` writes two more files per split: the
+MobileCLIP vectors, one per image and one per box crop. A vector is 2 KB next to a box
+row of a few dozen bytes, and most queries over silver want the boxes and not the
+vectors. Silver then builds without a Triton server.
 
 An embedding file is sorted by its id, in small row groups, so a reader of a few ids
 skips the rest of the file. A crop embedding row holds the pixel crop that made its
@@ -51,8 +52,14 @@ ATTRIBUTE_COLUMNS: tuple[pa.Field, ...] = (
     pa.field(name="attr_pose", type=pa.int32()),
     pa.field(name="attr_invalid", type=pa.bool_()),
     # Open Images marks a box that covers a crowd, and one that bounds a depiction.
+    # COCO marks a crowd box with iscrowd.
     pa.field(name="attr_is_group_of", type=pa.bool_()),
     pa.field(name="attr_is_depiction", type=pa.bool_()),
+    # TextOCR and HierText mark a word that no one can read. HierText also marks a
+    # handwritten word and a vertical word.
+    pa.field(name="attr_is_illegible", type=pa.bool_()),
+    pa.field(name="attr_is_handwritten", type=pa.bool_()),
+    pa.field(name="attr_is_vertical", type=pa.bool_()),
 )
 
 IMAGE_SCHEMA = pa.schema(
@@ -169,20 +176,20 @@ SILVER_TABLES: tuple[TableSpec, ...] = (
 ROWS_PER_ROW_GROUP = 8192
 
 
-def images_file(silver_dir: UPath, split: str) -> UPath:
-    return silver_dir / "images" / f"{split}.parquet"
+def images_file(build_dir: UPath, split: str) -> UPath:
+    return build_dir / "images" / f"{split}.parquet"
 
 
-def boxes_file(silver_dir: UPath, split: str) -> UPath:
-    return silver_dir / "boxes" / f"{split}.parquet"
+def boxes_file(build_dir: UPath, split: str) -> UPath:
+    return build_dir / "boxes" / f"{split}.parquet"
 
 
-def embeddings_file(silver_dir: UPath, split: str) -> UPath:
-    return silver_dir / "embeddings" / f"{split}.parquet"
+def embeddings_file(build_dir: UPath, split: str) -> UPath:
+    return build_dir / "embeddings" / f"{split}.parquet"
 
 
-def crop_embeddings_file(silver_dir: UPath, split: str) -> UPath:
-    return silver_dir / "crop_embeddings" / f"{split}.parquet"
+def crop_embeddings_file(build_dir: UPath, split: str) -> UPath:
+    return build_dir / "crop_embeddings" / f"{split}.parquet"
 
 
 class BoxOrigin:

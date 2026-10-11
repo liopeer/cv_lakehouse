@@ -38,7 +38,7 @@ from lakehouse_core.lake_store import is_local
 from lakehouse_core.remote_archives import unpack_remote_archive
 from lakehouse_core.s3_uploads import ResumableUpload, choose_part_size
 
-ARCHIVE_SUFFIXES = (".tar.gz", ".zip")
+ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".zip")
 PARTIAL_SUFFIX = ".partial"
 # Beside an object on S3 whose upload resumed, until a read back verified it.
 UNVERIFIED_SUFFIX = ".unverified"

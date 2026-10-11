@@ -11,7 +11,9 @@ the lake records its location, and every layer above reads bronze from there.
 # Dagster resolves the config and resource annotations at runtime, so this module
 # must not postpone its annotations.
 
+from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import dagster as dg
 from fsspec.core import split_protocol
@@ -22,10 +24,14 @@ from lakehouse_core.lake_resource import LakeResource
 from lakehouse_core.lake_store import LakeStore, is_local
 from lakehouse_core.manifest_files import write_manifest
 from lakehouse_core.published_files import (
+    PublishedFile,
     download_published_files,
     reject_incomplete_copy,
 )
 from lakehouse_core.published_source import PublishedSource
+
+# The kind tags whose icons the Dagster UI shows for a host of published files.
+HOST_KINDS = {"huggingface.co": "huggingface", "storage.googleapis.com": "gcs"}
 
 
 class BronzeConfig(dg.Config):
@@ -54,6 +60,11 @@ def _remove_old_symlink(bronze_dir: UPath) -> None:
         Path(str(bronze_dir)).unlink()
 
 
+def detect_host_kinds(published_files: Sequence[PublishedFile]) -> set[str]:
+    hosts = {urlsplit(file.url).hostname for file in published_files}
+    return {HOST_KINDS[host] for host in hosts if host in HOST_KINDS}
+
+
 def build_bronze_asset(source: PublishedSource[BronzeManifest]) -> dg.AssetsDefinition:
     publication = source.publication
     name = publication.name
@@ -61,7 +72,7 @@ def build_bronze_asset(source: PublishedSource[BronzeManifest]) -> dg.AssetsDefi
     @dg.asset(
         key=dg.AssetKey(["bronze", name]),
         group_name="bronze",
-        kinds={"file"},
+        kinds={"bronze", *detect_host_kinds(publication.published_files)},
         description=publication.description or f"Raw {name}.",
         metadata={
             "license": publication.license,

@@ -1,7 +1,7 @@
 [project]
 name = "lakehouse-cv"
 requires-python = ">=3.12,<3.15"
-version = "0.6.0"
+version = "0.8.0"
 description = "The computer vision domain of the lakehouse, built on Dagster."
 authors = [{ name = "Lionel Peer" }]
 license = "MIT"
@@ -16,6 +16,7 @@ dependencies = [
     "duckdb>=1.2.2,<1.6",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "ijson>=3.5.1",
     "labelformat>=0.1.17",
     "lakehouse-core",
     "pillow>=12.3.0",

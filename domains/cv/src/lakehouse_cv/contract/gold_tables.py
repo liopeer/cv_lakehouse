@@ -23,11 +23,6 @@ from lakehouse_cv.contract.silver_tables import ATTRIBUTE_COLUMNS, EMBEDDING_COL
 # A box with one of these set is not in gold, so gold has no column for them.
 FLAG_COLUMNS = ("attr_is_group_of", "attr_is_depiction", "attr_invalid")
 
-CHANGED_AT_COLUMN = "changed_at"
-_CHANGED_AT_FIELD = pa.field(
-    name=CHANGED_AT_COLUMN, type=pa.timestamp("us", tz="UTC"), nullable=False
-)
-
 GOLD_IMAGE_SCHEMA = pa.schema(
     [
         pa.field(name="image_id", type=pa.string(), nullable=False),
@@ -41,7 +36,6 @@ GOLD_IMAGE_SCHEMA = pa.schema(
         pa.field(name="image_path", type=pa.string(), nullable=False),
         pa.field(name="license", type=pa.string(), nullable=False),
         pa.field(name="commercial_use", type=pa.bool_(), nullable=False),
-        _CHANGED_AT_FIELD,
     ]
 )
 
@@ -66,7 +60,6 @@ GOLD_BOX_SCHEMA = pa.schema(
         pa.field(name="is_class_corrected", type=pa.bool_(), nullable=False),
         pa.field(name="is_geometry_corrected", type=pa.bool_(), nullable=False),
         pa.field(name="commercial_use", type=pa.bool_(), nullable=False),
-        _CHANGED_AT_FIELD,
     ]
 )
 
@@ -115,9 +108,15 @@ GOLD_TABLES: tuple[TableSpec, ...] = (
 )
 
 
-def gold_images_file(*, version_dir: UPath, dataset: str, split: str) -> UPath:
-    return version_dir / "images" / dataset / f"{split}.parquet"
+# The gold tables that a gold build writes. The API serves the vectors from silver.
+STORED_GOLD_TABLES = tuple(
+    table for table in GOLD_TABLES if table.name in ("images", "boxes")
+)
 
 
-def gold_boxes_file(*, version_dir: UPath, dataset: str, split: str) -> UPath:
-    return version_dir / "boxes" / dataset / f"{split}.parquet"
+def gold_images_file(*, build_dir: UPath, dataset: str, split: str) -> UPath:
+    return build_dir / "images" / dataset / f"{split}.parquet"
+
+
+def gold_boxes_file(*, build_dir: UPath, dataset: str, split: str) -> UPath:
+    return build_dir / "boxes" / dataset / f"{split}.parquet"

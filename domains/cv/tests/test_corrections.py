@@ -2,20 +2,23 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Fetch correction snapshots into bronze from a fake export."""
+"""Fetch event files into bronze from a fake export."""
 
 import dagster as dg
 import pyarrow.parquet as pq
 import pytest
 
-from lakehouse_cv.contract.correction_actions import CORRECTION_SCHEMA, CorrectionAction
+from lakehouse_cv.contract.correction_actions import EVENT_SCHEMA
 from lakehouse_cv.defs import corrections as corrections_defs
 from lakehouse_cv.defs.corrections import (
     build_corrections_asset,
+    build_studio_export_asset,
+    build_studio_export_key,
     read_corrections_manifest,
 )
 from lakehouse_cv.defs.resources import CvLakeResource
 from tests.export_fakes import EXPORT_URL, FakeExportServer
+from tests.lake_runs import run_assets
 
 DATASET = "wider_face"
 MOVED = {
@@ -23,7 +26,8 @@ MOVED = {
     "split": "train",
     "file_name": "0--Parade/a.jpg",
     "box_id": "00000000-0000-0000-0000-000000000001",
-    "action": CorrectionAction.UPDATE,
+    "is_deleted": False,
+    "label_name": "face",
     "x": 1.0,
     "y": 2.0,
     "w": 3.0,
@@ -34,7 +38,7 @@ DELETED = {
     "split": "train",
     "file_name": "0--Parade/a.jpg",
     "box_id": "00000000-0000-0000-0000-000000000002",
-    "action": CorrectionAction.DELETE,
+    "is_deleted": True,
 }
 
 
@@ -62,9 +66,9 @@ def export_lake(lake: CvLakeResource) -> CvLakeResource:
 def _materialize(
     lake: CvLakeResource, raise_on_error: bool = True
 ) -> dg.ExecuteInProcessResult:
-    return dg.materialize(
+    return run_assets(
         assets=[build_corrections_asset(DATASET)],
-        resources={"lake": lake},
+        lake=lake,
         raise_on_error=raise_on_error,
     )
 
@@ -75,65 +79,138 @@ def _read_data_version(result: dg.ExecuteInProcessResult) -> str | None:
     return tags.get("dagster/data_version")
 
 
+def _observe(lake: CvLakeResource, instance: dg.DagsterInstance) -> str | None:
+    observation_job = dg.define_asset_job(
+        name="observe_export", selection=[build_studio_export_key(DATASET)]
+    )
+    result = (
+        dg.Definitions(
+            assets=[build_studio_export_asset(DATASET)],
+            jobs=[observation_job],
+            resources={"lake": lake},
+        )
+        .resolve_job_def("observe_export")
+        .execute_in_process(instance=instance)
+    )
+    (observation,) = result.get_asset_observation_events()
+    tags = observation.asset_observation_data.asset_observation.tags or {}
+    return tags.get("dagster/data_version")
+
+
+def test_an_observation_with_no_export_url_reports_no_event(
+    lake: CvLakeResource, dagster_instance: dg.DagsterInstance
+) -> None:
+    assert _observe(lake=lake, instance=dagster_instance) == "none"
+
+
+def test_an_observation_of_an_empty_export_reports_no_event(
+    export_lake: CvLakeResource,
+    export_server: FakeExportServer,
+    dagster_instance: dg.DagsterInstance,
+) -> None:
+    assert _observe(lake=export_lake, instance=dagster_instance) == "none"
+
+
+def test_an_observation_reports_the_latest_event_file(
+    export_lake: CvLakeResource,
+    export_server: FakeExportServer,
+    dagster_instance: dg.DagsterInstance,
+) -> None:
+    export_server.publish(dataset=DATASET, rows=[MOVED])
+    latest = export_server.publish(dataset=DATASET, rows=[DELETED])
+
+    assert _observe(lake=export_lake, instance=dagster_instance) == latest
+
+
+def test_the_corrections_record_the_observed_export(
+    export_lake: CvLakeResource,
+    export_server: FakeExportServer,
+    dagster_instance: dg.DagsterInstance,
+) -> None:
+    export_server.publish(dataset=DATASET, rows=[MOVED])
+    observed = _observe(lake=export_lake, instance=dagster_instance)
+
+    result = _materialize(export_lake)
+
+    (materialization,) = result.get_asset_materialization_events()
+    tags = materialization.materialization.tags or {}
+    input_tag = "dagster/input_data_version/lightlystudio/wider_face_export"
+    assert tags.get(input_tag) == observed == _read_data_version(result)
+
+
 def test_a_lake_with_no_export_url_fetches_nothing(lake: CvLakeResource) -> None:
     result = _materialize(lake)
 
     assert result.success
-    assert read_corrections_manifest(paths=lake.paths, name=DATASET).snapshots == []
+    assert read_corrections_manifest(paths=lake.paths, name=DATASET).event_files == []
     assert _read_data_version(result) == "none"
 
 
-def test_a_snapshot_lands_in_bronze_as_published(
+def _find_event_file(
+    lake: CvLakeResource, server: FakeExportServer, event_file_id: str
+):
+    return (
+        lake.paths.corrections_dir(DATASET)
+        / "events"
+        / server.chain_id
+        / event_file_id
+        / "events.parquet"
+    )
+
+
+def test_an_event_file_lands_in_bronze_as_published(
     export_lake: CvLakeResource, export_server: FakeExportServer
 ) -> None:
-    snapshot_id = export_server.publish(dataset=DATASET, rows=[MOVED, DELETED])
+    event_file_id = export_server.publish(dataset=DATASET, rows=[MOVED, DELETED])
 
     result = _materialize(export_lake)
 
-    (snapshot,) = read_corrections_manifest(
+    (event_file,) = read_corrections_manifest(
         paths=export_lake.paths, name=DATASET
-    ).snapshots
-    assert snapshot.snapshot_id == snapshot_id
-    assert (snapshot.sequence, snapshot.parent_snapshot_id) == (1, None)
-    path = export_lake.paths.corrections_dir(DATASET) / snapshot.file.path
+    ).event_files
+    assert event_file.event_file_id == event_file_id
+    assert (event_file.sequence, event_file.parent_event_file_id) == (1, None)
+    assert (event_file.after_log_sequence, event_file.last_log_sequence) == (0, 2)
+    assert event_file.chain_id == export_server.chain_id
+    path = export_lake.paths.corrections_dir(DATASET) / event_file.file.path
     assert path.read_bytes() == next(iter(export_server.files.values()))
-    assert pq.read_table(path).schema == CORRECTION_SCHEMA
-    assert _read_data_version(result) == snapshot_id
+    assert pq.read_table(path).schema == EVENT_SCHEMA
+    assert _read_data_version(result) == event_file_id
 
 
-def test_a_later_run_fetches_only_the_new_snapshot(
+def test_a_later_run_fetches_only_the_new_event_file(
     export_lake: CvLakeResource, export_server: FakeExportServer
 ) -> None:
     first = export_server.publish(dataset=DATASET, rows=[MOVED])
     _materialize(export_lake)
-    first_file = (
-        export_lake.paths.corrections_dir(DATASET)
-        / "snapshots"
-        / first
-        / "corrections.parquet"
+    first_file = _find_event_file(
+        lake=export_lake, server=export_server, event_file_id=first
     )
     first_modified = first_file.stat().st_mtime_ns
-    second = export_server.publish(dataset=DATASET, rows=[MOVED, DELETED])
+    second = export_server.publish(dataset=DATASET, rows=[DELETED])
 
     result = _materialize(export_lake)
 
     manifest = read_corrections_manifest(paths=export_lake.paths, name=DATASET)
-    assert [snapshot.snapshot_id for snapshot in manifest.snapshots] == [first, second]
-    assert manifest.snapshots[1].parent_snapshot_id == first
+    assert [event_file.event_file_id for event_file in manifest.event_files] == [
+        first,
+        second,
+    ]
+    assert manifest.event_files[1].parent_event_file_id == first
     assert first_file.stat().st_mtime_ns == first_modified
     assert _read_data_version(result) == second
 
 
-def test_a_run_with_no_new_snapshot_keeps_the_data_version(
+def test_a_run_with_no_new_event_file_keeps_the_data_version(
     export_lake: CvLakeResource, export_server: FakeExportServer
 ) -> None:
-    snapshot_id = export_server.publish(dataset=DATASET, rows=[MOVED])
+    event_file_id = export_server.publish(dataset=DATASET, rows=[MOVED])
     _materialize(export_lake)
 
-    assert _read_data_version(_materialize(export_lake)) == snapshot_id
+    assert _read_data_version(_materialize(export_lake)) == event_file_id
 
 
-def test_a_stored_snapshot_that_the_export_changed_fails_the_run(
+def test_a_stored_event_file_that_the_export_changed_fails_the_run(
     export_lake: CvLakeResource, export_server: FakeExportServer
 ) -> None:
     export_server.publish(dataset=DATASET, rows=[MOVED])
@@ -144,46 +221,75 @@ def test_a_stored_snapshot_that_the_export_changed_fails_the_run(
     assert not _materialize(lake=export_lake, raise_on_error=False).success
 
 
-def test_a_stored_snapshot_that_changed_on_disk_fails_the_run(
+def test_a_stored_event_file_that_changed_on_disk_fails_the_run(
     export_lake: CvLakeResource, export_server: FakeExportServer
 ) -> None:
-    snapshot_id = export_server.publish(dataset=DATASET, rows=[MOVED])
+    event_file_id = export_server.publish(dataset=DATASET, rows=[MOVED])
     _materialize(export_lake)
-    path = (
-        export_lake.paths.corrections_dir(DATASET)
-        / "snapshots"
-        / snapshot_id
-        / "corrections.parquet"
+    path = _find_event_file(
+        lake=export_lake, server=export_server, event_file_id=event_file_id
     )
     path.write_bytes(b"not the pinned bytes")
 
     assert not _materialize(lake=export_lake, raise_on_error=False).success
 
 
-def test_an_export_that_lost_its_history_fails_the_run(
+def test_an_export_that_lost_its_log_fails_the_run(
     export_lake: CvLakeResource, export_server: FakeExportServer
 ) -> None:
-    """A new LightlyStudio database lists nothing, and silver must not lose a fix."""
+    """The same database lists fewer files, and silver must not lose an edit."""
     export_server.publish(dataset=DATASET, rows=[MOVED])
     _materialize(export_lake)
     export_server.listings.clear()
 
     assert not _materialize(lake=export_lake, raise_on_error=False).success
     assert (
-        len(read_corrections_manifest(paths=export_lake.paths, name=DATASET).snapshots)
+        len(
+            read_corrections_manifest(paths=export_lake.paths, name=DATASET).event_files
+        )
         == 1
     )
 
 
-def test_a_snapshot_with_the_wrong_parent_fails_the_run(
+def test_an_event_file_with_the_wrong_parent_fails_the_run(
     export_lake: CvLakeResource, export_server: FakeExportServer
 ) -> None:
     export_server.publish(dataset=DATASET, rows=[MOVED])
     _materialize(export_lake)
-    export_server.publish(dataset=DATASET, rows=[MOVED, DELETED])
-    export_server.listings[DATASET][1]["parent_snapshot_id"] = "000001-other"
+    export_server.publish(dataset=DATASET, rows=[DELETED])
+    export_server.listings[DATASET][1]["parent_event_file_id"] = "000001-other"
 
     assert not _materialize(lake=export_lake, raise_on_error=False).success
+
+
+def test_an_event_file_with_a_gap_in_the_log_fails_the_run(
+    export_lake: CvLakeResource, export_server: FakeExportServer
+) -> None:
+    export_server.publish(dataset=DATASET, rows=[MOVED])
+    _materialize(export_lake)
+    export_server.publish(dataset=DATASET, rows=[DELETED])
+    export_server.listings[DATASET][1]["after_log_sequence"] = 5
+
+    assert not _materialize(lake=export_lake, raise_on_error=False).success
+
+
+def test_a_new_database_starts_a_chain_and_bronze_keeps_the_old_one(
+    export_lake: CvLakeResource, export_server: FakeExportServer
+) -> None:
+    old = export_server.publish(dataset=DATASET, rows=[MOVED])
+    old_chain = export_server.chain_id
+    _materialize(export_lake)
+    export_server.start_new_chain()
+
+    assert _materialize(export_lake).success
+    new = export_server.publish(dataset=DATASET, rows=[DELETED])
+    _materialize(export_lake)
+
+    manifest = read_corrections_manifest(paths=export_lake.paths, name=DATASET)
+    assert [
+        (event_file.chain_id, event_file.event_file_id)
+        for event_file in manifest.event_files
+    ] == [(old_chain, old), (export_server.chain_id, new)]
 
 
 def test_a_download_with_the_wrong_bytes_fails_the_run(
@@ -195,5 +301,6 @@ def test_a_download_with_the_wrong_bytes_fails_the_run(
 
     assert not _materialize(lake=export_lake, raise_on_error=False).success
     assert (
-        read_corrections_manifest(paths=export_lake.paths, name=DATASET).snapshots == []
+        read_corrections_manifest(paths=export_lake.paths, name=DATASET).event_files
+        == []
     )
