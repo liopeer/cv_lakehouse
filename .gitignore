@@ -212,3 +212,6 @@ history/
 
 # The lakehouse data. Point CV_LAKEHOUSE_ROOT elsewhere to move it.
 /data/
+
+# A local map of the lakehouse, not part of the repository.
+docs/lakehouse_map.html
