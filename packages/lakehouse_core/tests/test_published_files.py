@@ -213,6 +213,17 @@ def test_a_tar_unpacks_beside_itself(tmp_path: Path) -> None:
     assert (tmp_path / "validation" / "aaa.jpg").read_bytes() == b"jpeg"
 
 
+def test_a_tgz_unpacks_beside_itself(tmp_path: Path) -> None:
+    archive = tmp_path / "validation.tgz"
+    with tarfile.open(name=archive, mode="w:gz") as tar:
+        data = b"jpeg"
+        info = tarfile.TarInfo(name="validation/aaa.jpg")
+        info.size = len(data)
+        tar.addfile(tarinfo=info, fileobj=io.BytesIO(data))
+    unpack_archive_beside(archive)
+    assert (tmp_path / "validation" / "aaa.jpg").read_bytes() == b"jpeg"
+
+
 def test_a_failed_unpack_leaves_no_tree(tmp_path: Path) -> None:
     archive = tmp_path / "broken.zip"
     archive.write_bytes(b"not a zip")
