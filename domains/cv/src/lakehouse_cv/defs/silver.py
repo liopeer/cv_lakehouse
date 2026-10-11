@@ -66,8 +66,9 @@ EDGE_TOLERANCE_PIXELS = 1e-6
 # The silver tables that this asset writes. The embedding asset writes the others.
 ROW_TABLE_NAMES = ("images", "boxes")
 
-# Bump this when the normalisation rules change, such as clipping or the drop policy.
-SILVER_LOGIC_VERSION = "6"
+# Bump this when the normalisation rules or the columns change, such as clipping, the
+# drop policy or a new attribute column.
+SILVER_LOGIC_VERSION = "7"
 
 
 def build_silver_asset(name: str) -> dg.AssetsDefinition:

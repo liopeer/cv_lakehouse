@@ -20,7 +20,16 @@ from lakehouse_cv.transforms.layer_builds import (
     silver_build_dir,
 )
 
-DATASETS = ("open_images", "wider_face", "pp4av", "coco", "lvis", "coco_wholebody")
+DATASETS = (
+    "open_images",
+    "wider_face",
+    "pp4av",
+    "coco",
+    "lvis",
+    "coco_wholebody",
+    "textocr",
+    "hiertext",
+)
 
 # One instance per test, so a run sees what an earlier run of the test materialized.
 # The fixture `dagster_instance` sets it.

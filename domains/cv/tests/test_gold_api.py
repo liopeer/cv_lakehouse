@@ -107,8 +107,8 @@ def test_classes_are_the_class_registry(lake: CvLakeResource) -> None:
 
 
 def test_images_and_boxes_come_unfiltered(client: TestClient) -> None:
-    assert len(_rows(client=client, path="/v1/images")) == 16
-    assert len(_rows(client=client, path="/v1/boxes")) == 18
+    assert len(_rows(client=client, path="/v1/images")) == 22
+    assert len(_rows(client=client, path="/v1/boxes")) == 23
 
 
 @pytest.mark.parametrize(
@@ -116,13 +116,13 @@ def test_images_and_boxes_come_unfiltered(client: TestClient) -> None:
     argvalues=[
         ({"dataset": "pp4av"}, 3),
         ({"dataset": ["pp4av", "wider_face"]}, 5),
-        ({"role": "test"}, 4),
-        ({"role": ["val", "test"]}, 9),
+        ({"role": "test"}, 5),
+        ({"role": ["val", "test"]}, 10),
         ({"split": "fisheye"}, 1),
         ({"dataset": "open_images", "role": "val"}, 3),
         ({"class_name": "license_plate"}, 4),
         ({"class_name": ["face", "other"]}, 9),
-        ({"commercial_use": "true"}, 5),
+        ({"commercial_use": "true"}, 10),
         ({"dataset": "no_such_dataset"}, 0),
     ],
 )
@@ -149,7 +149,7 @@ def test_paging_returns_every_box_once(client: TestClient) -> None:
         after = body["next_after"]
         if after is None:
             break
-    assert len(seen) == len(set(seen)) == 18
+    assert len(seen) == len(set(seen)) == 23
     assert seen == sorted(seen)
 
 

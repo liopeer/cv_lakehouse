@@ -55,6 +55,11 @@ ATTRIBUTE_COLUMNS: tuple[pa.Field, ...] = (
     # COCO marks a crowd box with iscrowd.
     pa.field(name="attr_is_group_of", type=pa.bool_()),
     pa.field(name="attr_is_depiction", type=pa.bool_()),
+    # TextOCR and HierText mark a word that no one can read. HierText also marks a
+    # handwritten word and a vertical word.
+    pa.field(name="attr_is_illegible", type=pa.bool_()),
+    pa.field(name="attr_is_handwritten", type=pa.bool_()),
+    pa.field(name="attr_is_vertical", type=pa.bool_()),
 )
 
 IMAGE_SCHEMA = pa.schema(

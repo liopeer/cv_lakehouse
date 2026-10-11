@@ -82,9 +82,11 @@ def test_gold_unions_every_silver_dataset(silver_lake: CvLakeResource) -> None:
     assert _query(lake=silver_lake, table="images", select="dataset, count(*)") == [
         ("coco", 3),
         ("coco_wholebody", 2),
+        ("hiertext", 3),
         ("lvis", 2),
         ("open_images", 3),
         ("pp4av", 2),
+        ("textocr", 3),
         ("wider_face", 4),
     ]
 
@@ -113,6 +115,9 @@ def test_gold_gives_every_row_the_role_of_its_split(
         ("coco", "val", "val"),
         ("coco_wholebody", "train", "train"),
         ("coco_wholebody", "val", "val"),
+        ("hiertext", "test", "test"),
+        ("hiertext", "train", "train"),
+        ("hiertext", "validation", "val"),
         ("lvis", "train", "train"),
         ("lvis", "val", "val"),
         ("open_images", "test", "test"),
@@ -120,6 +125,8 @@ def test_gold_gives_every_row_the_role_of_its_split(
         ("open_images", "validation", "val"),
         ("pp4av", "fisheye", "test"),
         ("pp4av", "test", "test"),
+        ("textocr", "train", "train"),
+        ("textocr", "val", "val"),
         ("wider_face", "train", "train"),
         ("wider_face", "val", "val"),
     ]
@@ -133,6 +140,9 @@ def test_gold_drops_every_flagged_box(silver_lake: CvLakeResource) -> None:
         ("coco", "train", 2),
         ("coco", "val", 1),
         ("coco_wholebody", "train", 3),
+        # A word that no one can read is no flag, so gold keeps it.
+        ("hiertext", "test", 1),
+        ("hiertext", "train", 2),
         ("lvis", "train", 2),
         # Silver holds five boxes here. The crowd box and the depiction drop out.
         ("open_images", "test", 1),
@@ -140,6 +150,7 @@ def test_gold_drops_every_flagged_box(silver_lake: CvLakeResource) -> None:
         ("open_images", "validation", 3),
         ("pp4av", "fisheye", 1),
         ("pp4av", "test", 2),
+        ("textocr", "train", 2),
         # Silver holds two. The region the annotators rejected drops out.
         ("wider_face", "train", 1),
         ("wider_face", "val", 1),
@@ -151,7 +162,7 @@ def test_gold_names_every_pixel_relative_to_the_lake_root(
 ) -> None:
     _build(lake=silver_lake, built_at=FIRST_BUILD)
     paths = _query(lake=silver_lake, table="images", select="image_path")
-    assert len(paths) == 12
+    assert len(paths) == 18
     assert all((silver_lake.paths.root / path).is_file() for (path,) in paths)
 
 

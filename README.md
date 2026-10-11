@@ -104,6 +104,8 @@ attribute:
 | coco | `attr_is_group_of` |
 | lvis | none |
 | coco_wholebody | `attr_is_group_of`, on a person box |
+| textocr | `attr_is_illegible` |
+| hiertext | `attr_is_illegible`, `attr_is_handwritten`, `attr_is_vertical` |
 
 A box is keyed by `box_id`, an md5 of the dataset, the split, the file name and the box's
 position in the source, written as a UUID. A box that normalisation drops leaves every
@@ -233,6 +235,10 @@ pipeline, not for silver.
 | coco | persons, at every scale and in crowds | CC-BY-4.0 annotations, a Flickr licence per image | no |
 | lvis | licence plates, persons, signs and screens on the COCO images | CC-BY-4.0 annotations, the COCO images | no |
 | coco_wholebody | faces and hands of the COCO persons | CC-BY-NC-4.0 annotations, the COCO images | no |
+| textocr | every word on Open Images photos | CC-BY-4.0 and CC-BY-2.0 | yes |
+| hiertext | dense text on Open Images photos at up to 1600 px | CC-BY-SA-4.0 and CC-BY-2.0 | yes, share-alike |
+
+[docs/candidate_datasets.md](docs/candidate_datasets.md) lists the datasets to add next.
 
 `SilverManifest.commercial_use` carries each dataset's answer, so a consumer that mixes
 them can enforce its own licence rule.
@@ -260,6 +266,8 @@ a rebuild from the same silver gives the same rows.
 | coco | train, val | train, val |
 | lvis | train, val | train, val |
 | coco_wholebody | train, val | train, val |
+| textocr | train, val | train, val |
+| hiertext | train, validation, test | train, val, test |
 
 Gold has no versions. A build writes a new directory under `gold/builds/`, named by a
 digest of the code version and the silver builds, and then replaces `_gold.json`, which
@@ -465,6 +473,8 @@ copy that already exists links in place of a download:
 | coco | every 2017 link on the download page | `{train,val,test,unlabeled}2017/`, and a folder for each annotation zip |
 | lvis | every v1 link on the download page | a folder for each zip, such as `lvis_v1_train.json/` |
 | coco_wholebody | the two Google Drive links of its README | `coco_wholebody_{train,val}_v1.0.json` |
+| textocr | every link on its download page | `TextOCR_0.1_{train,val,test}.json`, `train_val_images/`, `test_images/` |
+| hiertext | its GitHub repository at a pinned commit, and the three image tgz files | the repository, and `train/`, `validation/`, `test/` |
 
 PP4AV publishes two label sets. Its dataset card calls `annotations` the curated one and
 `soiling_annotations` the raw one, before filtering. Bronze holds both, and the reader
@@ -481,6 +491,12 @@ files, and their silver reads the images in `bronze/coco`. A file name in their 
 is relative to the bronze of COCO, such as `train2017/000000397133.jpg`, because an LVIS
 val image can be in `train2017`. Their silver depends on `bronze/coco`, so a new bronze
 of COCO makes a new build.
+
+TextOCR and HierText box the words on Open Images photos. The TextOCR images are byte for
+byte the Open Images files. The HierText images are new exports at up to 1600 px, so
+their coordinates do not fit the Open Images files. Silver keeps the words of HierText,
+and bronze also keeps its lines and paragraphs. A word that no one can read is no flag,
+so gold keeps it, because it is still text in the picture.
 
 COCO-WholeBody gives a face box only where `face_valid` is set. A face under about 10 px
 has no box, and neither has some larger face.
