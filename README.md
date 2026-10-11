@@ -180,22 +180,21 @@ The server resolves the path itself, so the stack mounts `$CV_LAKEHOUSE_ROOT` re
 at the same path inside the container. If bronze links a copy outside the root, add a
 mount for that path to the compose file of the stack.
 
-A run embeds only what has no vector yet, on any code. An image keeps its vector,
-because bronze pins the pixels. A box keeps its vector while its crop on the pixel grid
-is the same, so a relabelled box is not embedded again, and a moved or a drawn box is.
-The run metadata counts the vectors it reused.
+The vectors come from a cache in `cache/<code version>/`. A run embeds only what the
+cache lacks, on any silver code. An image keeps its vector, because bronze pins the
+pixels. A box keeps its vector while its crop on the pixel grid is the same, so a
+relabelled box is not embedded again, and a moved or a drawn box is. A build reads no
+earlier build. The run metadata counts the vectors it took from the cache.
 
 The footer of an embedding file names the model and `EMBEDDING_VERSION`. A file of
 another model or version is embedded again. A new model behind the same name is not
 detected: bump `EMBEDDING_VERSION`. See
 [ADR 0013](docs/adr/0013-silver-vectors-are-sorted-and-kept.md).
 
-A run writes new vectors to closed parts of 65536 vectors, under `parts/`. If a run
-stops, the next run reuses every closed part. The run log reports the progress of each
-step once a minute, with the rate and the time left.
-
-Before this asset, silver kept the vectors in `silver/<dataset>/embeddings/` and
-`crop_embeddings/`. The first run of the asset reuses them. Delete them after that run.
+A run writes new vectors to the cache in closed parts of 65536 vectors. If a run stops,
+the next run takes every closed part. The cache never shrinks. Deleting it embeds every
+vector again, and changes none. The run log reports the progress of each step once a
+minute, with the rate and the time left.
 
 ### The class registry
 
@@ -397,7 +396,6 @@ $CV_LAKEHOUSE_ROOT/
   bronze/<dataset>_corrections/  the edits that curators made in LightlyStudio
     _corrections.json            every event file, with its checksum
     events/<chain>/<id>/events.parquet   one immutable event file
-    snapshots/<id>/corrections.parquet   one snapshot of ADR 0009, as history
   silver/<dataset>/
     _silver.json                     the current build
     builds/<id>/images/<split>.parquet   one row per image
@@ -406,7 +404,7 @@ $CV_LAKEHOUSE_ROOT/
     _embeddings.json                 the current build, and the silver build it covers
     builds/<id>/embeddings/<split>.parquet       one vector per image, by image_id
     builds/<id>/crop_embeddings/<split>.parquet  one vector per box crop, by box_id
-    parts/                           the vectors of a run that stopped
+    cache/<code version>/            one vector per key, for every build
   gold/
     _gold.json                       the current build, and its datasets
     builds/<id>/images/<dataset>/<split>.parquet   one row per image
@@ -482,7 +480,6 @@ export CV_LAKEHOUSE_STUDIO_EXPORT_URL=http://studio-sync:8002
   fails when the chain breaks, or when the export lists fewer files than bronze holds.
 - A new LightlyStudio database starts a new chain. Bronze keeps the old chain, and
   silver folds both, so a lost database loses no edit.
-- The snapshots of ADR 0009 stay in bronze as history. Silver reads them no longer.
 - The asset has no upstream asset, so the graph stays acyclic.
 - When the variable is unset, the asset fetches nothing and still succeeds.
 

@@ -42,12 +42,15 @@ earlier output of its own, no clock and no environment.
    reads the build that Dagster recorded for its upstream, by its id. The manifest
    beside `builds/` serves only a reader outside Dagster, such as the gold API.
 6. The vectors are the asset `silver/<dataset>_embeddings`. It reads the current silver
-   build, and fails when the Triton server is unset or unreachable. It never deletes a
-   vector. The server URL stays a resource: it says where the server is, not what the
-   asset does.
-7. The gold API serves a crop vector only for the crop of the gold box, so a box that
+   build, and fails when the Triton server is unset or unreachable. The server URL
+   stays a resource: it says where the server is, not what the asset does.
+7. The vectors come from a cache under `silver/<dataset>_embeddings/cache/`, one per
+   embedding code version. The cache holds one vector per key of ADR 0013, and never
+   shrinks. A run embeds only a key that the cache lacks. A build reads no earlier
+   build, so a rebuild from bronze gives the same vectors.
+8. The gold API serves a crop vector only for the crop of the gold box, so a box that
    moved after its vector was made gets none.
-8. Gold joins every registered dataset, and fails on a dataset with no silver. A lake
+9. Gold joins every registered dataset, and fails on a dataset with no silver. A lake
    that holds only some datasets names them in the config of the gold asset.
 
 ## Consequences
@@ -59,11 +62,14 @@ earlier output of its own, no clock and no environment.
   old build. Bump the logic version of the layer.
 - Silver means the same on any machine. A machine with no server builds silver and
   gold, and fails the embeddings.
-- A change to the class rules reruns silver. The embeddings then reuse every vector
-  whose pixels and crop are the same, as ADR 0013 decides.
+- A change to the class rules reruns silver. The embeddings then take every vector
+  whose pixels and crop are the same from the cache.
+- The cache is a memo of a pure function. Deleting it costs time, and changes no
+  vector.
 - The sync of LightlyStudio can no longer pull only the changed rows. ADR 0014 makes
   it a full overwrite.
 - A reader of the files reads the manifest first, to find the build.
-- The first run of the embeddings reuses the vectors that silver kept before. The tool
-  that moved a file of the layout before ADR 0013 goes away.
+- The vectors of the layout before this record are not read. The first run embeds
+  every image and every crop again. The tool that moved a file of the layout before
+  ADR 0013 goes away.
 - A dev lake with only some datasets needs the `datasets` config to build gold.

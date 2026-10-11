@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""An embeddings run embeds only what no earlier run embedded with the same model."""
+"""An embeddings run embeds only what the cache of the model lacks."""
 
 from collections.abc import Sequence
 from pathlib import Path
@@ -262,7 +262,11 @@ def test_a_rebuild_leaves_no_working_file_behind(reuse_lake: _Lake) -> None:
         for path in embeddings_dir.rglob("*")
         if path.is_file()
     }
-    assert names == {"_embeddings.json", "builds"}
+    assert names == {"_embeddings.json", "builds", "cache"}
+    cache_dir = reuse_lake.resource.paths.embeddings_dir(DATASET) / "cache"
+    assert {path.suffix for path in cache_dir.rglob("*") if path.is_file()} == {
+        ".parquet"
+    }
     current = find_embedding_files(lake=reuse_lake.resource, name=DATASET)
     assert {path.name for path in current.rglob("*") if path.is_file()} == {
         "_build.json",
@@ -271,16 +275,14 @@ def test_a_rebuild_leaves_no_working_file_behind(reuse_lake: _Lake) -> None:
     }
 
 
-def test_the_vectors_that_silver_kept_before_this_asset_are_reused(
-    reuse_lake: _Lake,
+def test_a_build_reads_the_cache_and_no_earlier_build(
+    reuse_lake: _Lake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A lake of the layout before keeps its vectors beside silver."""
     crops = reuse_lake.read_crop_vectors()
-    current = find_embedding_files(lake=reuse_lake.resource, name=DATASET)
-    legacy_dir = reuse_lake.resource.paths.silver_dir(DATASET)
-    for table in ("embeddings", "crop_embeddings"):
-        (current / table).rename(legacy_dir / table)
-    remove_tree(reuse_lake.resource.paths.embeddings_dir(DATASET))
+    embeddings_dir = reuse_lake.resource.paths.embeddings_dir(DATASET)
+    remove_tree(embeddings_dir / "builds")
+    (embeddings_dir / "_embeddings.json").unlink()
+    monkeypatch.setattr(target=silver_defs, name="SILVER_LOGIC_VERSION", value="next")
 
     reuse_lake.build_silver()
 

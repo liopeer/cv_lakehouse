@@ -5,10 +5,9 @@
 """Embedding assets: one MobileCLIP vector per image and per box crop of silver.
 
 The asset reads the silver build that Dagster recorded, and fails when no Triton server
-is set. A run
-embeds only an image or a crop that no earlier run embedded with the same model, also
-one that stopped halfway. A change to the class rules reruns silver, and this asset then
-reuses every vector whose pixels and crop are the same.
+is set. The vectors come from a cache of the model, keyed by the pixels and the crop. A
+run embeds only a row that the cache lacks, so a change to the class rules embeds no
+crop again.
 """
 
 # Dagster resolves the resource annotations at runtime, so this module must not
@@ -38,9 +37,7 @@ from lakehouse_cv.transforms.embedding_files import (
 from lakehouse_cv.transforms.embeddings import EMBEDDING_MODEL, TritonEmbedder
 from lakehouse_cv.transforms.layer_builds import (
     derive_build_id,
-    embeddings_build_dir,
     publish_build,
-    read_embeddings_manifest,
     read_silver_build,
     reuse_whole_build,
     silver_build_dir,
@@ -101,17 +98,7 @@ def build_embeddings_asset(name: str) -> dg.AssetsDefinition:
                 metadata={"build_id": build_id, "is_reused": True},
             )
         staged_dir = build_dir(layer_dir=embeddings_dir, build_id=build_id)
-        previous = read_embeddings_manifest(paths=lake.paths, name=name)
-        reusable_dirs = [
-            *(
-                []
-                if previous is None
-                else [embeddings_build_dir(paths=lake.paths, manifest=previous)]
-            ),
-            # Before this asset, silver kept the vectors beside its own files. A first
-            # run reuses them, so the move embeds nothing again.
-            lake.paths.silver_dir(name),
-        ]
+        cache_dir = embeddings_dir / "cache" / code_version
 
         written = {table.label: 0 for table in VECTOR_TABLES}
         num_reused = 0
@@ -137,14 +124,7 @@ def build_embeddings_asset(name: str) -> dg.AssetsDefinition:
                         files=SplitVectorFiles(
                             rows=table.rows_file(build_dir=rows_dir, split=split),
                             target=target,
-                            reusable=tuple(
-                                table.target_file(build_dir=directory, split=split)
-                                for directory in reusable_dirs
-                            ),
-                            parts_dir=embeddings_dir
-                            / "parts"
-                            / target.parent.name
-                            / split,
+                            cache_dir=cache_dir / target.parent.name / split,
                         ),
                         locate_image=locate_image,
                         log=context.log.info,

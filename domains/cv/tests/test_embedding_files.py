@@ -90,13 +90,11 @@ def _write_silver(silver_dir: Path, boxes: Sequence[tuple[float, ...]] = ()) -> 
 
 
 def _files(tmp_path: Path, table: VectorTable = IMAGE_VECTORS) -> SplitVectorFiles:
-    """Rebuild one target in place, as a run that reuses its own last file."""
     target = table.target_file(build_dir=UPath(tmp_path), split="train")
     return SplitVectorFiles(
         rows=table.rows_file(build_dir=UPath(tmp_path), split="train"),
         target=target,
-        reusable=(target,),
-        parts_dir=UPath(tmp_path) / "parts" / target.parent.name,
+        cache_dir=UPath(tmp_path) / "cache" / target.parent.name,
     )
 
 
@@ -141,7 +139,7 @@ def test_the_vectors_are_sorted_by_the_id_and_name_the_model(tmp_path: Path) -> 
         EMBEDDING_MODEL_METADATA_KEY: b"mobileclip_s0",
         EMBEDDING_VERSION_METADATA_KEY: b"1",
     }
-    assert not _files(tmp_path).parts_dir.exists()
+    assert list(_files(tmp_path).cache_dir.glob("*.parquet"))
 
 
 def test_a_crop_rounds_half_to_even_and_names_at_least_one_pixel(
@@ -182,20 +180,19 @@ def test_a_stopped_run_keeps_every_closed_part(
 
     files = _files(tmp_path)
     assert not files.target.exists()
-    assert len(list(files.parts_dir.iterdir())) == 3
+    assert len(list(files.cache_dir.iterdir())) == 3
     embedder = FakeEmbedder()
     count = _write(tmp_path, embedder)
     assert count == VectorCount(written=NUM_IMAGES, embedded=NUM_IMAGES - 12)
     assert len(set(embedder.paths)) == NUM_IMAGES - 12
-    assert not files.parts_dir.exists()
 
 
 def test_a_part_that_a_stopped_run_left_open_is_removed(tmp_path: Path) -> None:
     _write_silver(tmp_path)
-    parts_dir = _files(tmp_path).parts_dir
-    parts_dir.mkdir(parents=True)
-    (parts_dir / "part-0.writing").write_bytes(b"half a file")
-    (parts_dir / "part-1.parquet").write_bytes(b"not parquet")
+    cache_dir = _files(tmp_path).cache_dir
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "part-0.writing").write_bytes(b"half a file")
+    (cache_dir / "part-1.parquet").write_bytes(b"not parquet")
 
     count = _write(tmp_path, FakeEmbedder())
 

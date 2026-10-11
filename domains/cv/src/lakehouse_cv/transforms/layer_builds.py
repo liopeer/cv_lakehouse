@@ -21,7 +21,6 @@ the copy of the manifest inside the build.
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Sequence
 
 from upath import UPath
@@ -141,7 +140,8 @@ def publish_build(*, manifest_path: UPath, manifest: BuildManifest) -> None:
         / BUILD_MANIFEST,
         manifest=manifest,
     )
-    previous = _read_build_id(manifest_path)
+    current = read_build_manifest(path=manifest_path, model=BuildManifest)
+    previous = None if current is None else current.build_id
     if previous == manifest.build_id:
         # The manifest names this build already. The build before it stays.
         return
@@ -163,13 +163,3 @@ def remove_builds(*, layer_dir: UPath, kept: set[str]) -> None:
 
 def discard_build(*, layer_dir: UPath, build_id: str) -> None:
     remove_tree(build_dir(layer_dir=layer_dir, build_id=build_id))
-
-
-def _read_build_id(manifest_path: UPath) -> str | None:
-    """Return the build that a manifest names, or None for a manifest with no build.
-
-    A manifest of the layout before builds names none, and its run is replaced anyway.
-    """
-    if not manifest_path.exists():
-        return None
-    return json.loads(manifest_path.read_text()).get("build_id")
