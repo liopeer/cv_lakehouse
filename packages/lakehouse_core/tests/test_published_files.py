@@ -23,6 +23,7 @@ from lakehouse_core.published_files import (
     ChecksumMismatchError,
     PublishedFile,
     compute_checksum,
+    compute_pinned_checksum,
     download_published_file,
     list_required_paths,
     reject_incomplete_copy,
@@ -143,12 +144,26 @@ def test_computes_every_checksum_kind(
     )
     assert compute_checksum(path=path, kind=ChecksumKind.S3_ETAG) == md5.hexdigest()
 
-    monkeypatch.setattr(target=published_files, name="S3_PART_SIZE", value=400)
     parts = [CONTENT[0:400], CONTENT[400:800], CONTENT[800:]]
     combined = hashlib.md5(b"".join(hashlib.md5(part).digest() for part in parts))
-    assert compute_checksum(path=path, kind=ChecksumKind.S3_ETAG) == (
+    assert compute_checksum(path=path, kind=ChecksumKind.S3_ETAG, part_size=400) == (
         f"{combined.hexdigest()}-3"
     )
+
+
+def test_computes_an_etag_in_the_form_of_the_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "file.bin"
+    path.write_bytes(CONTENT)
+    monkeypatch.setattr(target=published_files, name="S3_PART_SIZE", value=400)
+    single_part = hashlib.md5(CONTENT).hexdigest()
+    single_pin = Checksum(kind=ChecksumKind.S3_ETAG, value=single_part)
+    assert compute_pinned_checksum(path=path, pin=single_pin) == single_part
+
+    multipart = compute_checksum(path=path, kind=ChecksumKind.S3_ETAG, part_size=400)
+    multipart_pin = Checksum(kind=ChecksumKind.S3_ETAG, value=multipart)
+    assert compute_pinned_checksum(path=path, pin=multipart_pin) == multipart
 
 
 def _write_zip(path: Path, names: list[str]) -> None:
