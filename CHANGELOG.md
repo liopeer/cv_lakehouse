@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/liopeer/cv_lakehouse/compare/v0.8.0...v0.9.0) (2026-10-11)
+
+
+### Features
+
+* **cv:** show the embeddings in their own group in the dagster ui ([#75](https://github.com/liopeer/cv_lakehouse/issues/75)) ([744a1c2](https://github.com/liopeer/cv_lakehouse/commit/744a1c2b85cd8f6646f52d2cd4766bda4c7f767b))
+
+
+### Bug Fixes
+
+* verify a single-part s3 etag as the md5 of the whole file ([#74](https://github.com/liopeer/cv_lakehouse/issues/74)) ([36c1c9e](https://github.com/liopeer/cv_lakehouse/commit/36c1c9e4f2f491135f5e1286110ded7cfa6ba250))
+
 ## [0.8.0](https://github.com/liopeer/cv_lakehouse/compare/v0.7.0...v0.8.0) (2026-10-11)
 
 
