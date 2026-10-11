@@ -1589,7 +1589,7 @@ wheels = [
 
 [[package]]
 name = "lakehouse-core"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "packages/lakehouse_core" }
 dependencies = [
     { name = "adlfs" },
@@ -1622,7 +1622,7 @@ requires-dist = [
 
 [[package]]
 name = "lakehouse-cv"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "domains/cv" }
 dependencies = [
     { name = "dagster" },
