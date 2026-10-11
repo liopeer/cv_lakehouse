@@ -18,6 +18,7 @@ import dagster as dg
 from upath import UPath
 
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST
+from lakehouse_core.column_schemas import build_table_schema_metadata
 from lakehouse_core.fingerprints import sha256_fingerprint
 from lakehouse_core.lake_store import LakeStore
 from lakehouse_core.manifest_files import read_manifest
@@ -31,7 +32,11 @@ from lakehouse_cv.contract.manifests import (
     SilverManifest,
     build_dir,
 )
-from lakehouse_cv.contract.silver_tables import boxes_file, images_file
+from lakehouse_cv.contract.silver_tables import (
+    SILVER_TABLES,
+    boxes_file,
+    images_file,
+)
 from lakehouse_cv.defs.corrections import (
     build_corrections_key,
     list_event_paths,
@@ -58,6 +63,9 @@ from lakehouse_cv.transforms.silver_writer import write_split
 EDGE_TOLERANCE_PIXELS = 1e-6
 
 
+# The silver tables that this asset writes. The embedding asset writes the others.
+ROW_TABLE_NAMES = ("images", "boxes")
+
 # Bump this when the normalisation rules change, such as clipping or the drop policy.
 SILVER_LOGIC_VERSION = "6"
 
@@ -77,7 +85,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
         key=dg.AssetKey(["silver", name]),
         deps=[dg.AssetKey(["bronze", name]), build_corrections_key(name)],
         group_name="silver",
-        kinds={"file"},
+        kinds={"silver", "parquet"},
         code_version=code_version,
         description=(
             f"{name} on the class registry, with the corrections of the curators "
@@ -85,7 +93,13 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             "`attr_*` columns carry what the source published; "
             "LightlyStudio cannot display them yet."
         ),
-        metadata={"license": spec.license, "commercial_use": spec.commercial_use},
+        metadata={
+            "license": spec.license,
+            "commercial_use": spec.commercial_use,
+            **build_table_schema_metadata(
+                [table for table in SILVER_TABLES if table.name in ROW_TABLE_NAMES]
+            ),
+        },
     )
     def _silver(
         context: dg.AssetExecutionContext, lake: CvLakeResource

@@ -16,6 +16,7 @@ crop again.
 import dagster as dg
 
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST
+from lakehouse_core.column_schemas import build_table_schema_metadata
 from lakehouse_core.fingerprints import sha256_fingerprint
 from lakehouse_core.lake_store import build_reader_locator
 from lakehouse_core.manifest_files import read_manifest
@@ -25,6 +26,7 @@ from lakehouse_cv.contract.manifests import (
     EmbeddingsManifest,
     build_dir,
 )
+from lakehouse_cv.contract.silver_tables import SILVER_TABLES
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.defs.upstream_builds import read_upstream_build_id
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
@@ -46,6 +48,8 @@ from lakehouse_cv.transforms.layer_builds import (
 # Long enough for a request that waits in the queue of Triton.
 PRESIGNED_URL_SECONDS = 3600
 
+VECTOR_TABLE_NAMES = ("embeddings", "crop_embeddings")
+
 
 def build_embeddings_key(name: str) -> dg.AssetKey:
     return dg.AssetKey(["silver", f"{name}_embeddings"])
@@ -60,11 +64,14 @@ def build_embeddings_asset(name: str) -> dg.AssetsDefinition:
         key=build_embeddings_key(name),
         deps=[dg.AssetKey(["silver", name])],
         group_name="silver",
-        kinds={"file"},
+        kinds={"silver", "parquet"},
         code_version=code_version,
         description=(
             f"One {EMBEDDING_MODEL} embedding per image and per box crop of silver "
             f"{name}, sorted by the id. Needs CV_LAKEHOUSE_TRITON_URL."
+        ),
+        metadata=build_table_schema_metadata(
+            [table for table in SILVER_TABLES if table.name in VECTOR_TABLE_NAMES]
         ),
     )
     def _embeddings(

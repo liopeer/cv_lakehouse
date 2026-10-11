@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 
 import dagster as dg
 
+from lakehouse_core.column_schemas import build_table_schema_metadata
+from lakehouse_cv.contract.gold_tables import STORED_GOLD_TABLES
 from lakehouse_cv.defs.gold import GOLD_KEY
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.defs.upstream_builds import read_upstream_build_id
@@ -29,12 +31,13 @@ def build_eval_release_asset() -> dg.AssetsDefinition:
         key=EVAL_RELEASE_KEY,
         deps=[GOLD_KEY],
         group_name="gold",
-        kinds={"file"},
+        kinds={"gold", "parquet"},
         description=(
             "A frozen copy of the val and test rows of gold. Every run publishes the "
             "next number, and no run changes an earlier one. Run it by hand, when a "
             "round of corrections is done."
         ),
+        metadata=build_table_schema_metadata(STORED_GOLD_TABLES),
     )
     def _eval_release(
         context: dg.AssetExecutionContext, lake: CvLakeResource
