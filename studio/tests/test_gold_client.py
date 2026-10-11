@@ -64,7 +64,7 @@ def test_read_meta_and_class_names_parse_the_api_answers() -> None:
         return httpx.Response(
             status_code=200,
             json={
-                "version": 3,
+                "build_id": "b1",
                 "built_at": "2026-01-01T00:00:00Z",
                 "code_version": "abc",
                 "datasets": [
@@ -73,6 +73,8 @@ def test_read_meta_and_class_names_parse_the_api_answers() -> None:
                         "license": "MIT",
                         "commercial_use": True,
                         "silver_code_version": "x",
+                        "silver_build_id": "s1",
+                        "last_event": {"chain_id": "c1", "log_sequence": 7},
                         "embedding_model": None,
                         "splits": [
                             {"split": "train", "role": "train", "image_root": "r"}
@@ -91,7 +93,10 @@ def test_read_meta_and_class_names_parse_the_api_answers() -> None:
     )
     assert client.read_class_names() == ["face"]
     meta = client.read_meta()
-    assert (meta.version, meta.datasets[0].splits[0].role) == (3, "train")
+    assert (meta.build_id, meta.datasets[0].splits[0].role) == ("b1", "train")
+    last_event = meta.datasets[0].last_event
+    assert last_event is not None
+    assert (last_event.chain_id, last_event.log_sequence) == ("c1", 7)
 
 
 def test_a_slice_reaches_the_api_as_parameters() -> None:

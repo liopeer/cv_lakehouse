@@ -9,7 +9,7 @@ import dataclasses
 import pytest
 
 from lakehouse_cv.contract.split_roles import SplitRole
-from lakehouse_cv.defs import gold, silver
+from lakehouse_cv.defs import gold, silver, silver_embeddings
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 
 
@@ -47,16 +47,26 @@ def test_a_category_map_change_marks_one_silver_asset_stale(
     argnames=("name", "value"),
     argvalues=[("EMBEDDING_MODEL", "mobileclip_s2"), ("EMBEDDING_VERSION", "next")],
 )
-def test_a_new_embedding_model_marks_every_silver_asset_stale(
+def test_a_new_embedding_model_marks_the_embeddings_stale_and_no_silver_asset(
     monkeypatch: pytest.MonkeyPatch, name: str, value: str
 ) -> None:
-    """The vectors are part of silver, so a model swap has to rebuild the layer."""
-    before = _silver_versions()
+    silver_before = _silver_versions()
+    before = _embeddings_versions()
 
-    monkeypatch.setattr(target=silver, name=name, value=value)
+    monkeypatch.setattr(target=silver_embeddings, name=name, value=value)
 
-    after = _silver_versions()
+    after = _embeddings_versions()
     assert all(after[name] != before[name] for name in before)
+    assert _silver_versions() == silver_before
+
+
+def _embeddings_versions() -> dict[str, str | None]:
+    return {
+        name: silver_embeddings.build_embeddings_asset(name)
+        .get_asset_spec()
+        .code_version
+        for name in SOURCE_BY_NAME
+    }
 
 
 def test_a_split_role_change_marks_gold_stale_and_no_silver_asset(

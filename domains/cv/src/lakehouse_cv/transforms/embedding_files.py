@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025–2026 Lionel Peer
 #
-"""Write the embedding files of one silver split, and reuse every vector that exists.
+"""Write the embedding files of one split from a cache of vectors.
 
-A vector depends on the pixels, the crop and the model. Bronze pins the pixels, and a
-crop embedding row holds its crop. So a vector of an earlier run stays right while its
-file names the same model, whatever else in silver changed since.
+A vector depends on the pixels, the crop and the model, and on nothing else. Bronze
+pins the pixels, and a crop embedding row holds its crop. So the cache of one model
+holds a vector for each key, and a build of any silver reads it.
 
-The new vectors go into parts beside the target, one closed file at a time. A run that
-stops keeps every closed part, and the next run reuses it. The target is written last,
-one range of ids at a time, so a split of any size fits in memory.
+A run embeds each row that the cache lacks into parts of the cache, one closed file at
+a time. A run that stops keeps every closed part. The target is written last, one range
+of ids at a time, so a split of any size fits in memory. The cache never shrinks.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import pyarrow.parquet as pq
 from numpy.typing import NDArray
 from upath import UPath
 
-from lakehouse_core.lake_files import remove_tree, replace_file
+from lakehouse_core.lake_files import replace_file
 from lakehouse_core.lake_store import LakeStore
 from lakehouse_core.parquet_files import open_parquet_writer, read_parquet_schema
 from lakehouse_cv.contract.box_identity import IMAGE_ID_SQL
@@ -58,7 +58,6 @@ ROWS_PER_PART = 65_536
 # The target is written in ranges of ids of about this many rows, which is 128 MB.
 ROWS_PER_RANGE = 65_536
 
-_PARTS_SUFFIX = ".parts"
 _PART_SUFFIX = ".parquet"
 _NEXT_SUFFIX = ".next"
 
@@ -131,8 +130,16 @@ IMAGE_VECTORS = VectorTable(
     embed=_embed_images,
 )
 
-# `round_even` rounds half to even, as Python's `round` does. A box under half a pixel
-# still names one pixel, so the crop on the server has an area.
+# The box on the pixel grid, from a silver or a gold box row. `round_even` rounds half
+# to even, as Python's `round` does. A box under half a pixel still names one pixel, so
+# the crop on the server has an area.
+CROP_SQL = """
+round_even(x, 0)::integer as crop_x,
+round_even(y, 0)::integer as crop_y,
+greatest(1, round_even(w, 0))::integer as crop_width,
+greatest(1, round_even(h, 0))::integer as crop_height
+"""
+
 CROP_VECTORS = VectorTable(
     label="crop embeddings",
     schema=CROP_EMBEDDING_SCHEMA,
@@ -140,18 +147,25 @@ CROP_VECTORS = VectorTable(
     match_columns=("box_id", "crop_x", "crop_y", "crop_width", "crop_height"),
     rows_file=boxes_file,
     target_file=crop_embeddings_file,
-    rows_query="""
-    select dataset, split, file_name, box_id, box_index,
-           round_even(x, 0)::integer as crop_x,
-           round_even(y, 0)::integer as crop_y,
-           greatest(1, round_even(w, 0))::integer as crop_width,
-           greatest(1, round_even(h, 0))::integer as crop_height
+    rows_query=f"""
+    select dataset, split, file_name, box_id, box_index, {CROP_SQL}
     from read_parquet($rows)
     """,
     embed=_embed_crops,
 )
 
 VECTOR_TABLES = (IMAGE_VECTORS, CROP_VECTORS)
+
+
+@dataclass(frozen=True)
+class SplitVectorFiles:
+    """The files that one run reads and writes for one split and one table."""
+
+    # The silver file whose rows need a vector.
+    rows: UPath
+    target: UPath
+    # The parts of the cache, for one model, one table and one split.
+    cache_dir: UPath
 
 
 @dataclass(frozen=True)
@@ -169,60 +183,38 @@ def write_vectors(
     store: LakeStore,
     embedder: Embedder,
     table: VectorTable,
-    silver_dir: UPath,
-    split: str,
+    files: SplitVectorFiles,
     locate_image: Callable[[str], str],
     log: Callable[[str], None],
 ) -> VectorCount:
     """Write the embedding file of one split, and embed only a row with no vector."""
-    target = table.target_file(silver_dir=silver_dir, split=split)
-    parts_dir = parts_dir_of(target)
-    _remove_unusable_parts(table=table, parts_dir=parts_dir)
+    _remove_unusable_parts(table=table, cache_dir=files.cache_dir)
+    label = f"{files.target.stem} {table.label}"
     with store.duckdb() as connection:
-        select_wanted_rows(
-            connection=connection,
-            table=table,
-            rows=table.rows_file(silver_dir=silver_dir, split=split),
-        )
+        select_wanted_rows(connection=connection, table=table, rows=files.rows)
         embedded = _embed_missing_rows(
             connection=connection,
             embedder=embedder,
             table=table,
-            pool=list_vector_files(table=table, target=target),
-            parts_dir=parts_dir,
+            pool=list_vector_files(table=table, cache_dir=files.cache_dir),
+            cache_dir=files.cache_dir,
             locate_image=locate_image,
-            progress_label=f"{split} {table.label} to embed",
+            progress_label=f"{label} to embed",
             log=log,
         )
         written = write_sorted_vectors(
             connection=connection,
             table=table,
-            pool=list_vector_files(table=table, target=target),
-            target=target,
-            progress_label=f"{split} {table.label} to write",
+            pool=list_vector_files(table=table, cache_dir=files.cache_dir),
+            target=files.target,
+            progress_label=f"{label} to write",
             log=log,
         )
-    remove_tree(parts_dir)
     return VectorCount(written=written, embedded=embedded)
 
 
-def clear_vectors(silver_dir: UPath, split: str) -> None:
-    """Remove the embedding files of one split, and their parts.
-
-    A rematerialisation with no server rewrites the images and the boxes, so a vector
-    left behind describes pixels that a query no longer has a row for.
-    """
-    for table in VECTOR_TABLES:
-        target = table.target_file(silver_dir=silver_dir, split=split)
-        target.unlink(missing_ok=True)
-        remove_tree(parts_dir_of(target))
-
-
 def holds_vectors_of_this_model(*, table: VectorTable, path: UPath) -> bool:
-    """Tell an embedding file of this layout whose footer names the model of this code.
-
-    A file of the layout before ADR 0013 has no such footer, and fails the test.
-    """
+    """Tell an embedding file whose footer names the model of this code."""
     try:
         schema = read_parquet_schema(path)
     except (OSError, pa.ArrowInvalid):
@@ -249,7 +241,7 @@ def select_wanted_rows(
     *, connection: duckdb.DuckDBPyConnection, table: VectorTable, rows: UPath
 ) -> None:
     """Fill the temporary table `wanted` with the rows of a silver file, by the id."""
-    # Every range of the target reads the parts again. The footers stay in memory.
+    # Every range of the target reads the cache again. The footers stay in memory.
     connection.execute("set parquet_metadata_cache = true")
     connection.execute(
         query=f"create temp table wanted as {table.rows_query} order by {table.key}",
@@ -263,7 +255,7 @@ def _embed_missing_rows(
     embedder: Embedder,
     table: VectorTable,
     pool: Sequence[UPath],
-    parts_dir: UPath,
+    cache_dir: UPath,
     locate_image: Callable[[str], str],
     progress_label: str,
     log: Callable[[str], None],
@@ -282,7 +274,7 @@ def _embed_missing_rows(
         connection.execute("create temp view missing as select * from wanted")
     total = _count_rows(connection=connection, table_name="missing")
     progress = ProgressLog(log=log, label=progress_label, total=total)
-    writer = _PartWriter(table=table, parts_dir=parts_dir)
+    writer = _PartWriter(table=table, cache_dir=cache_dir)
     try:
         # In the order of the id, so that every part covers one narrow range of ids.
         for rows in connection.execute(
@@ -364,8 +356,8 @@ def _read_vector_range(
         parameters["upper"] = upper
     where = f"where {' and '.join(conditions)}" if conditions else ""
     columns = ", ".join(f"w.{name}" for name in table.row_columns)
-    # A run that stopped after the target was replaced and before the parts were
-    # removed leaves a vector twice. Both copies are equal, so either one serves.
+    # Two runs that embed at the same time can both cache a vector. Both copies are
+    # equal, so either one serves.
     query = f"""
     select {columns}, v.{EMBEDDING_COLUMN}
     from wanted w
@@ -421,26 +413,22 @@ def _count_rows(*, connection: duckdb.DuckDBPyConnection, table_name: str) -> in
     return 0 if row is None else int(row[0])
 
 
-def parts_dir_of(target: UPath) -> UPath:
-    return target.with_name(target.name + _PARTS_SUFFIX)
-
-
-def list_vector_files(*, table: VectorTable, target: UPath) -> list[UPath]:
-    """Return the target and the closed parts that hold vectors of this model."""
-    parts_dir = parts_dir_of(target)
-    parts = sorted(parts_dir.glob(f"*{_PART_SUFFIX}")) if parts_dir.exists() else []
+def list_vector_files(*, table: VectorTable, cache_dir: UPath) -> list[UPath]:
+    """Return the parts of the cache that hold vectors of this model."""
+    if not cache_dir.exists():
+        return []
     return [
         path
-        for path in [target, *parts]
-        if path.exists() and holds_vectors_of_this_model(table=table, path=path)
+        for path in sorted(cache_dir.glob(f"*{_PART_SUFFIX}"))
+        if holds_vectors_of_this_model(table=table, path=path)
     ]
 
 
-def _remove_unusable_parts(*, table: VectorTable, parts_dir: UPath) -> None:
+def _remove_unusable_parts(*, table: VectorTable, cache_dir: UPath) -> None:
     """Remove a part that a stopped run left open, or that holds another model."""
-    if not parts_dir.exists():
+    if not cache_dir.exists():
         return
-    for path in parts_dir.iterdir():
+    for path in cache_dir.iterdir():
         if not path.name.endswith(_PART_SUFFIX) or not holds_vectors_of_this_model(
             table=table, path=path
         ):
@@ -454,9 +442,9 @@ class _PartWriter:
     so every file that ends in `.parquet` is whole.
     """
 
-    def __init__(self, *, table: VectorTable, parts_dir: UPath) -> None:
+    def __init__(self, *, table: VectorTable, cache_dir: UPath) -> None:
         self._table = table
-        self._parts_dir = parts_dir
+        self._cache_dir = cache_dir
         self._writer: pq.ParquetWriter | None = None
         self._writing: UPath | None = None
         self._rows = 0
@@ -465,7 +453,7 @@ class _PartWriter:
         if batch.num_rows == 0:
             return
         if self._writer is None:
-            self._writing = self._parts_dir / f"part-{uuid.uuid4().hex}.writing"
+            self._writing = self._cache_dir / f"part-{uuid.uuid4().hex}.writing"
             self._writer = open_vector_writer(table=self._table, path=self._writing)
         self._writer.write_batch(batch, row_group_size=EMBEDDING_ROWS_PER_ROW_GROUP)
         self._rows += batch.num_rows

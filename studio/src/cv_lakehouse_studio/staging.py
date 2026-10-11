@@ -39,16 +39,21 @@ _CREATE_STAGING_TABLES = (
         x integer, y integer, width integer, height integer, origin text
     ) on commit drop
     """,
-    """
-    create temp table stage_embedding (sample_id uuid, embedding vector)
-    on commit drop
-    """,
 )
 
 
 def create_staging_tables(session: Session) -> None:
     for statement in _CREATE_STAGING_TABLES:
         session.execute(text(statement))
+
+
+def create_embedding_staging_table(session: Session) -> None:
+    session.execute(
+        text(
+            "create temp table stage_embedding (sample_id uuid, embedding vector) "
+            "on commit drop"
+        )
+    )
 
 
 def stage_names(session: Session, table: str, ids: dict[str, UUID]) -> None:
