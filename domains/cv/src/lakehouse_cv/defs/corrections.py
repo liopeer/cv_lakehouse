@@ -15,7 +15,9 @@ import dagster as dg
 import httpx
 from upath import UPath
 
+from lakehouse_core.column_schemas import build_column_schema
 from lakehouse_core.manifest_files import read_manifest, write_manifest
+from lakehouse_cv.contract.correction_actions import EVENT_SCHEMA
 from lakehouse_cv.contract.manifests import (
     CORRECTIONS_MANIFEST,
     CorrectionsManifest,
@@ -66,11 +68,17 @@ def build_corrections_asset(name: str) -> dg.AssetsDefinition:
     @dg.asset(
         key=build_corrections_key(name),
         group_name="bronze",
-        kinds={"file"},
+        kinds={"bronze", "parquet", "lightlystudio"},
         description=(
             f"The edits that curators made to {name} in LightlyStudio, as immutable "
             "event files. Silver folds every one of them."
         ),
+        # A box has one row per edit, so the events have no key.
+        metadata={
+            "events_schema": dg.MetadataValue.table_schema(
+                build_column_schema(EVENT_SCHEMA)
+            )
+        },
     )
     def _corrections(
         context: dg.AssetExecutionContext, lake: CvLakeResource

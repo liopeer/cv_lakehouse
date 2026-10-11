@@ -11,7 +11,9 @@ from datetime import UTC, datetime
 
 import dagster as dg
 
+from lakehouse_core.column_schemas import build_table_schema_metadata
 from lakehouse_core.fingerprints import sha256_fingerprint
+from lakehouse_cv.contract.gold_tables import STORED_GOLD_TABLES
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.defs.upstream_builds import read_upstream_build_id
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
@@ -39,13 +41,14 @@ def build_gold_asset() -> dg.AssetsDefinition:
         key=GOLD_KEY,
         deps=[dg.AssetKey(["silver", spec.name]) for spec in specs],
         group_name="gold",
-        kinds={"file"},
+        kinds={"gold", "parquet"},
         code_version=code_version,
         description=(
             "Every silver dataset as one images and one boxes Parquet per dataset and "
             "split. A row carries its role, and no box is flagged. A dataset with no "
             "silver fails the run."
         ),
+        metadata=build_table_schema_metadata(STORED_GOLD_TABLES),
     )
     def _gold(
         context: dg.AssetExecutionContext, config: GoldConfig, lake: CvLakeResource

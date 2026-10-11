@@ -9,7 +9,7 @@ import dagster as dg
 import pytest
 from upath import UPath
 
-from lakehouse_core.bronze_asset import build_bronze_asset
+from lakehouse_core.bronze_asset import build_bronze_asset, detect_host_kinds
 from lakehouse_core.bronze_manifest import BRONZE_MANIFEST, BronzeManifest, BronzeMode
 from lakehouse_core.lake_resource import LakeResource
 from lakehouse_core.manifest_files import read_manifest
@@ -78,6 +78,19 @@ def test_the_asset_is_named_after_the_publication() -> None:
     assert spec.key == dg.AssetKey(["bronze", "rows"])
     assert spec.group_name == "bronze"
     assert spec.description == "Raw rows."
+    assert spec.kinds == {"bronze"}
+
+
+def test_a_known_host_adds_its_kind() -> None:
+    files = [
+        file.model_copy(update={"url": url})
+        for file in _RowsSource.publication.published_files
+        for url in (
+            "https://huggingface.co/datasets/rows/resolve/abc/rows.txt",
+            "https://example.com/rows.txt",
+        )
+    ]
+    assert detect_host_kinds(files) == {"huggingface"}
 
 
 def test_a_link_writes_the_manifest_of_the_domain(tmp_path: Path) -> None:

@@ -108,6 +108,12 @@ GOLD_TABLES: tuple[TableSpec, ...] = (
 )
 
 
+# The gold tables that a gold build writes. The API serves the vectors from silver.
+STORED_GOLD_TABLES = tuple(
+    table for table in GOLD_TABLES if table.name in ("images", "boxes")
+)
+
+
 def gold_images_file(*, build_dir: UPath, dataset: str, split: str) -> UPath:
     return build_dir / "images" / dataset / f"{split}.parquet"
 
