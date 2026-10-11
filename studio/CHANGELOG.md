@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.4.0...studio-v0.5.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* make every asset a pure function of its inputs ([#67](https://github.com/liopeer/cv_lakehouse/issues/67))
+
+### Features
+
+* make every asset a pure function of its inputs ([#67](https://github.com/liopeer/cv_lakehouse/issues/67)) ([782d5b0](https://github.com/liopeer/cv_lakehouse/commit/782d5b0371e3cf0aced90cd7fb009f4e07c267fd))
+
+
+### Bug Fixes
+
+* **studio:** keep the box merge fast on the first sync of a split ([#63](https://github.com/liopeer/cv_lakehouse/issues/63)) ([65e524d](https://github.com/liopeer/cv_lakehouse/commit/65e524d4f3c3d5def2e1ac014e57fd3837cc13ef))
+
 ## [0.4.0](https://github.com/liopeer/cv_lakehouse/compare/studio-v0.3.0...studio-v0.4.0) (2026-10-08)
 
 
