@@ -63,7 +63,7 @@ def build_embeddings_asset(name: str) -> dg.AssetsDefinition:
     @dg.asset(
         key=build_embeddings_key(name),
         deps=[dg.AssetKey(["silver", name])],
-        group_name="silver",
+        group_name="embeddings",
         kinds={"silver", "parquet"},
         code_version=code_version,
         description=(
