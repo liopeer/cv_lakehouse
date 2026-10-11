@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0](https://github.com/liopeer/cv_lakehouse/compare/v0.6.0...v0.7.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* make every asset a pure function of its inputs ([#67](https://github.com/liopeer/cv_lakehouse/issues/67))
+
+### Features
+
+* make every asset a pure function of its inputs ([#67](https://github.com/liopeer/cv_lakehouse/issues/67)) ([782d5b0](https://github.com/liopeer/cv_lakehouse/commit/782d5b0371e3cf0aced90cd7fb009f4e07c267fd))
+
+
+### Documentation
+
+* **adr:** propose curator edits as bronze events ([#65](https://github.com/liopeer/cv_lakehouse/issues/65)) ([3c41e36](https://github.com/liopeer/cv_lakehouse/commit/3c41e361160116c37b67bd83700d09495c744c67))
+
 ## [0.6.0](https://github.com/liopeer/cv_lakehouse/compare/v0.5.0...v0.6.0) (2026-10-09)
 
 
