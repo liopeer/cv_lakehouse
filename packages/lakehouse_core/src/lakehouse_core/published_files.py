@@ -27,6 +27,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from enum import StrEnum
 from pathlib import Path
+from typing import Self
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -115,30 +116,34 @@ def reject_incomplete_copy(
 
 
 class StreamingChecksum:
-    """Compute a checksum of any kind over chunks, as they arrive."""
+    """Compute a checksum of any kind over chunks, as they arrive.
 
-    def __init__(self, kind: ChecksumKind) -> None:
+    An S3 ETag without a `part_size` is the md5 of a single-part upload.
+    """
+
+    def __init__(self, kind: ChecksumKind, part_size: int | None = None) -> None:
         self._kind = kind
         self._digest = (
             hashlib.sha256() if kind is ChecksumKind.SHA256 else hashlib.md5()
         )
         self._part_digests: list[bytes] = []
-        self._part_size = 0
+        self._part_size = part_size if kind is ChecksumKind.S3_ETAG else None
+        self._part_filled = 0
 
     def update(self, chunk: bytes) -> None:
-        if self._kind is not ChecksumKind.S3_ETAG:
+        if self._part_size is None:
             self._digest.update(chunk)
             return
         view = memoryview(chunk)
         while view:
-            taken = view[: S3_PART_SIZE - self._part_size]
+            taken = view[: self._part_size - self._part_filled]
             self._digest.update(taken)
-            self._part_size += len(taken)
+            self._part_filled += len(taken)
             view = view[len(taken) :]
-            if self._part_size == S3_PART_SIZE:
+            if self._part_filled == self._part_size:
                 self._part_digests.append(self._digest.digest())
                 self._digest = hashlib.md5()
-                self._part_size = 0
+                self._part_filled = 0
 
     def value(self) -> str:
         if self._kind is ChecksumKind.SHA256:
@@ -146,16 +151,36 @@ class StreamingChecksum:
         if self._kind is ChecksumKind.MD5_BASE64:
             return base64.b64encode(self._digest.digest()).decode()
         part_digests = list(self._part_digests)
-        if self._part_size or not part_digests:
+        if self._part_filled or not part_digests:
             part_digests.append(self._digest.digest())
         if len(part_digests) == 1:
             return part_digests[0].hex()
         combined = hashlib.md5(b"".join(part_digests)).hexdigest()
         return f"{combined}-{len(part_digests)}"
 
+    @classmethod
+    def for_pin(cls, checksum: Checksum) -> Self:
+        """Compute the checksum in the form that the pin has."""
+        return cls(kind=checksum.kind, part_size=detect_etag_part_size(checksum))
 
-def compute_checksum(path: Path | UPath, kind: ChecksumKind) -> str:
-    checksum = StreamingChecksum(kind)
+
+def detect_etag_part_size(checksum: Checksum) -> int | None:
+    if checksum.kind is ChecksumKind.S3_ETAG and "-" in checksum.value:
+        return S3_PART_SIZE
+    return None
+
+
+def compute_checksum(
+    path: Path | UPath, kind: ChecksumKind, part_size: int | None = None
+) -> str:
+    checksum = StreamingChecksum(kind=kind, part_size=part_size)
+    for chunk in _read_chunks(path=path, size=READ_CHUNK_SIZE):
+        checksum.update(chunk)
+    return checksum.value()
+
+
+def compute_pinned_checksum(path: Path | UPath, pin: Checksum) -> str:
+    checksum = StreamingChecksum.for_pin(pin)
     for chunk in _read_chunks(path=path, size=READ_CHUNK_SIZE):
         checksum.update(chunk)
     return checksum.value()
@@ -342,7 +367,9 @@ def _download_to_s3(
         if offset and response.status_code != httpx.codes.PARTIAL_CONTENT:
             # The server sends the whole file. The parts already sent are useless.
             offset = upload.restart()
-        checksum = None if offset else StreamingChecksum(published_file.checksum.kind)
+        checksum = (
+            None if offset else StreamingChecksum.for_pin(published_file.checksum)
+        )
         buffer = bytearray()
         for chunk in response.iter_raw():
             if checksum is not None:
@@ -384,7 +411,7 @@ def _download_to_object(
     if target.exists() and target.stat().st_size == published_file.size:
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    checksum = StreamingChecksum(published_file.checksum.kind)
+    checksum = StreamingChecksum.for_pin(published_file.checksum)
     size = 0
     log.info(f"Downloading {published_file.url}")
     try:
@@ -415,7 +442,7 @@ def _download_to_object(
 
 
 def _verify_object(path: UPath, marker: UPath, published_file: PublishedFile) -> None:
-    actual = compute_checksum(path=path, kind=published_file.checksum.kind)
+    actual = compute_pinned_checksum(path=path, pin=published_file.checksum)
     if actual != published_file.checksum.value:
         path.unlink()
         marker.unlink()
@@ -454,14 +481,10 @@ def _verify(path: Path, published_file: PublishedFile) -> None:
         raise ChecksumMismatchError(
             f"{published_file.url} gave {size} bytes, expected {published_file.size}"
         )
-    kind = published_file.checksum.kind
-    actual = compute_checksum(path=path, kind=kind)
+    actual = compute_pinned_checksum(path=path, pin=published_file.checksum)
     if actual != published_file.checksum.value:
         path.unlink()
-        raise ChecksumMismatchError(
-            f"{published_file.url} has {kind} {actual}, "
-            f"expected {published_file.checksum.value}"
-        )
+        _raise_mismatch(published_file=published_file, actual=actual)
 
 
 def _read_chunks(path: Path | UPath, size: int) -> Iterator[bytes]:
