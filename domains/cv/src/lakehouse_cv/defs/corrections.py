@@ -4,8 +4,9 @@
 #
 """Bronze assets for the corrections that curators make in LightlyStudio.
 
-LightlyStudio is outside the lakehouse, so this asset has no upstream asset, as a
-download has none. The graph stays acyclic, although the corrections are made on gold.
+LightlyStudio is outside the lakehouse. The upstream of this asset is an observation of
+the export, which Dagster never materializes. The graph stays acyclic, although the
+corrections are made on gold.
 """
 
 # Dagster resolves the resource annotations at runtime, so this module must not
@@ -25,7 +26,10 @@ from lakehouse_cv.contract.manifests import (
 )
 from lakehouse_cv.defs.resources import CvLakeResource
 from lakehouse_cv.settings import CvLakePaths
-from lakehouse_cv.sources.correction_events import fetch_new_event_files
+from lakehouse_cv.sources.correction_events import (
+    fetch_new_event_files,
+    read_event_listing,
+)
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 
 NO_EVENT_DATA_VERSION = "none"
@@ -33,6 +37,10 @@ NO_EVENT_DATA_VERSION = "none"
 
 def build_corrections_key(name: str) -> dg.AssetKey:
     return dg.AssetKey(["bronze", f"{name}_corrections"])
+
+
+def build_studio_export_key(name: str) -> dg.AssetKey:
+    return dg.AssetKey(["lightlystudio", f"{name}_export"])
 
 
 def read_corrections_manifest(paths: CvLakePaths, name: str) -> CorrectionsManifest:
@@ -64,9 +72,48 @@ def open_export_client(timeout: float) -> httpx.Client:
     return httpx.Client(timeout=timeout, follow_redirects=True)
 
 
+def build_studio_export_asset(name: str) -> dg.AssetsDefinition:
+    @dg.multi_observable_source_asset(
+        name=f"observe_{name}_export",
+        specs=[
+            dg.AssetSpec(
+                key=build_studio_export_key(name),
+                group_name="lightlystudio",
+                kinds={"lightlystudio"},
+                description=(
+                    "The event files that the LightlyStudio export publishes for "
+                    f"{name}. The data version is the latest event file."
+                ),
+            )
+        ],
+    )
+    def _studio_export(
+        context: dg.AssetExecutionContext, lake: CvLakeResource
+    ) -> dg.ObserveResult:
+        if lake.studio_export_url is None:
+            context.log.warning(
+                "CV_LAKEHOUSE_STUDIO_EXPORT_URL is unset, so this observation reads no "
+                "export."
+            )
+            return dg.ObserveResult(data_version=dg.DataVersion(NO_EVENT_DATA_VERSION))
+        with open_export_client(lake.request_timeout_seconds) as client:
+            listing = read_event_listing(
+                client=client, export_url=lake.studio_export_url, dataset=name
+            )
+        latest = listing.event_files[-1] if listing.event_files else None
+        return dg.ObserveResult(
+            data_version=dg.DataVersion(
+                NO_EVENT_DATA_VERSION if latest is None else latest.event_file_id
+            )
+        )
+
+    return _studio_export
+
+
 def build_corrections_asset(name: str) -> dg.AssetsDefinition:
     @dg.asset(
         key=build_corrections_key(name),
+        deps=[build_studio_export_key(name)],
         group_name="bronze",
         kinds={"bronze", "parquet", "lightlystudio"},
         description=(
@@ -125,4 +172,10 @@ def build_corrections_asset(name: str) -> dg.AssetsDefinition:
     return _corrections
 
 
-defs = dg.Definitions(assets=[build_corrections_asset(name) for name in SOURCE_BY_NAME])
+defs = dg.Definitions(
+    assets=[
+        builder(name)
+        for name in SOURCE_BY_NAME
+        for builder in (build_studio_export_asset, build_corrections_asset)
+    ]
+)
