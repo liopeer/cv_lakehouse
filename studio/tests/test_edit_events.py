@@ -6,10 +6,8 @@
 
 import hashlib
 import io
-from datetime import UTC, datetime
 
 import psycopg
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
@@ -144,47 +142,6 @@ def test_the_sync_publishes_no_event(database_url: str) -> None:
     sync_every_dataset(client=client, image_base="/lake")
 
     assert _publish(database_url) is None
-
-
-def test_the_first_event_file_takes_over_the_latest_snapshot(
-    database_url: str, synced: FakeGoldClient
-) -> None:
-    """A correction made before the log is in the first event file."""
-    curator.delete_box(BOX_2)
-    with psycopg.connect(database_url) as connection:
-        # The sync was the one to log nothing so far. Drop the delete from the log, as
-        # a database before the triggers holds no entry.
-        connection.execute("delete from lakehouse_sync.edit_log")
-        connection.execute(
-            """
-            insert into lakehouse_sync.snapshot
-                (dataset, sequence, snapshot_id, parent_snapshot_id, created_at,
-                 row_count, size, sha256, content)
-            values (%s, 1, '000001-old', null, %s, 1, 0, '', %s)
-            """,
-            (DATASET, datetime(2026, 1, 1, tzinfo=UTC), _serialize_snapshot([BOX_2])),
-        )
-    curator.relabel_box(box_id=BOX_1, label_name="other")
-
-    assert _publish(database_url) == [
-        _tombstone(BOX_2),
-        _event(BOX_1, label_name="other"),
-    ]
-
-
-def _serialize_snapshot(box_ids: list[str]) -> bytes:
-    table = pa.table(
-        {
-            "dataset": [DATASET] * len(box_ids),
-            "split": ["train"] * len(box_ids),
-            "file_name": ["a.jpg"] * len(box_ids),
-            "box_id": box_ids,
-            "action": ["delete"] * len(box_ids),
-        }
-    )
-    sink = pa.BufferOutputStream()
-    pq.write_table(table=table, where=sink)
-    return sink.getvalue().to_pybytes()
 
 
 @pytest.mark.usefixtures("synced")

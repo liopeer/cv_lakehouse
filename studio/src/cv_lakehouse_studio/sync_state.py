@@ -57,22 +57,8 @@ _STATEMENTS = (
     # overwrite needs neither.
     f"drop table if exists {SYNC_SCHEMA}.loaded_box",
     f"drop table if exists {SYNC_SCHEMA}.synced_dataset",
-    # The snapshots of ADR 0009. The first event file of a dataset takes over the boxes
-    # of its latest snapshot, and then no code reads them.
-    f"""
-    create table if not exists {SYNC_SCHEMA}.snapshot (
-        dataset text not null,
-        sequence integer not null,
-        snapshot_id text not null,
-        parent_snapshot_id text,
-        created_at timestamptz not null,
-        row_count integer not null,
-        size integer not null,
-        sha256 text not null,
-        content bytea not null,
-        primary key (dataset, sequence)
-    )
-    """,
+    # The snapshots of ADR 0009. Silver reads the event files only.
+    f"drop table if exists {SYNC_SCHEMA}.snapshot",
     # One row per database. A new database starts a new chain of event files.
     f"""
     create table if not exists {SYNC_SCHEMA}.event_chain (

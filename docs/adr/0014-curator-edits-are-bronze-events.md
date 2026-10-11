@@ -97,7 +97,6 @@ source. The sync overwrites LightlyStudio from gold on every run.
 - A sync writes every box on every run. Time one run on Open Images.
 - A new release of a source is a separate decision. The box ids of that release decide
   whether the events of the old release still apply.
-- The first event file of a dataset also holds the boxes of its latest snapshot, as
-  LightlyStudio holds them then. No correction of ADR 0009 is lost.
+- A correction of ADR 0009 is in no event file. The lake held no such correction.
 - A deleted LightlyStudio dataset logs a tombstone for each of its boxes.
 - This record supersedes ADR 0009.

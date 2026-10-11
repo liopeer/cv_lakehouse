@@ -99,8 +99,6 @@ The sync image also serves the edits of the curators, for the lakehouse asset
 - The boxes are whole pixels, as LightlyStudio stores them. The lake compares an event
   with the source box rounded to whole pixels, so a box that was only relabelled keeps
   its exact coordinates.
-- The first file of a dataset also holds the boxes of its latest snapshot of ADR 0009,
-  as LightlyStudio holds them now.
 
 The files are in Postgres, in `lakehouse_sync.event_file`. A new database starts a new
 chain under a new id, and the lake keeps the files of the old one. Back up Postgres all

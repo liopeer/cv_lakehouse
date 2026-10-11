@@ -35,16 +35,6 @@ class CvBronzeManifest(BronzeManifest):
         return {"splits": list(self.splits)}
 
 
-class CorrectionSnapshot(BaseModel):
-    snapshot_id: str
-    sequence: int
-    parent_snapshot_id: str | None
-    created_at: datetime
-    row_count: int
-    # The pin: the size and the checksum that the download verified.
-    file: PublishedFile
-
-
 class CorrectionEventFile(BaseModel):
     # The LightlyStudio database that logged the events. A new database starts a new
     # chain.
@@ -70,14 +60,9 @@ class EventMarker(BaseModel):
 
 
 class CorrectionsManifest(BaseModel):
-    """The curator edits of one dataset, in the order that bronze took them.
-
-    Silver folds every event file. The snapshots of ADR 0009 are history, and silver
-    reads them no longer.
-    """
+    """The curator edits of one dataset, in the order that bronze took them."""
 
     dataset: str
-    snapshots: list[CorrectionSnapshot] = Field(default_factory=list)
     event_files: list[CorrectionEventFile] = Field(default_factory=list)
 
     @property

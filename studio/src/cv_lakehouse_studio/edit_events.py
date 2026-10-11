@@ -8,15 +8,11 @@ The triggers of `sync_state` log every edit of a curator. An event file holds th
 boxes of the log entries after the last file of the dataset: each box as LightlyStudio
 holds it now, or a tombstone when it is gone. A file names the range of the log that it
 covers, and the file before it. A stored file never changes.
-
-The first file of a dataset also holds the boxes of its latest snapshot of ADR 0009, so
-no correction made before the log is lost.
 """
 
 from __future__ import annotations
 
 import hashlib
-import io
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -87,11 +83,6 @@ def publish_event_file_if_new(
             dataset=dataset,
             after_log_sequence=after,
             last_log_sequence=last,
-            snapshot_boxes=(
-                _read_snapshot_boxes(connection=connection, dataset=dataset)
-                if latest is None
-                else _EMPTY_SNAPSHOT_BOXES
-            ),
         )
         if events.num_rows == 0:
             return None
@@ -131,7 +122,6 @@ def read_events(
     dataset: str,
     after_log_sequence: int,
     last_log_sequence: int,
-    snapshot_boxes: pa.Table,
 ) -> pa.Table:
     """Return the edited boxes of a part of the log, in the order of the log."""
     rows = connection.execute(
@@ -140,9 +130,6 @@ def read_events(
             "dataset": dataset,
             "after": after_log_sequence,
             "last": last_log_sequence,
-            "box_ids": snapshot_boxes.column("box_id").to_pylist(),
-            "splits": snapshot_boxes.column("split").to_pylist(),
-            "file_names": snapshot_boxes.column("file_name").to_pylist(),
         },
     ).fetchall()
     columns = list(zip(*rows, strict=True)) or [[] for _ in EVENT_SCHEMA]
@@ -202,41 +189,13 @@ def _read_last_log_sequence(connection: psycopg.Connection) -> int:
     return 0 if row is None else int(row[0])
 
 
-_EMPTY_SNAPSHOT_BOXES = pa.table(
-    {
-        "split": pa.array([], type=pa.string()),
-        "file_name": pa.array([], type=pa.string()),
-        "box_id": pa.array([], type=pa.string()),
-    }
-)
-
-
-def _read_snapshot_boxes(connection: psycopg.Connection, dataset: str) -> pa.Table:
-    """Return the boxes of the latest snapshot of ADR 0009, or none."""
-    row = connection.execute(
-        f"""
-        select content from {SYNC_SCHEMA}.snapshot
-        where dataset = %(dataset)s
-        order by sequence desc
-        limit 1
-        """,
-        {"dataset": dataset},
-    ).fetchone()
-    if row is None:
-        return _EMPTY_SNAPSHOT_BOXES
-    return pq.read_table(io.BytesIO(bytes(row[0]))).select(
-        ["split", "file_name", "box_id"]
-    )
-
-
 def _serialize_events(events: pa.Table) -> bytes:
     sink = pa.BufferOutputStream()
     pq.write_table(table=events, where=sink)
     return sink.getvalue().to_pybytes()
 
 
-# Every logged box, with the image of the box as the log or LightlyStudio names it. A
-# box of a snapshot has its image in the snapshot, and comes first, as the log entry 0.
+# Every logged box, with the image of the box as the log or LightlyStudio names it.
 _EVENT_QUERY = f"""
 with logged as (
     select sample_id, max(sequence) as log_sequence,
@@ -267,12 +226,6 @@ edited as (
        or not exists (
            select from annotation_base other where other.sample_id = logged.sample_id
        )
-    union all
-    select snapshot_box.box_id::uuid, 0, %(dataset)s, snapshot_box.split,
-           snapshot_box.file_name
-    from unnest(%(box_ids)s::text[], %(splits)s::text[], %(file_names)s::text[])
-        as snapshot_box(box_id, split, file_name)
-    where snapshot_box.box_id::uuid not in (select sample_id from logged)
 )
 select edited.dataset, edited.split, edited.file_name, edited.sample_id::text,
        edited.log_sequence, box.sample_id is null, box.label, box.x::float8,

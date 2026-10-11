@@ -454,6 +454,5 @@ def test_the_schema_drops_the_record_of_the_last_write() -> None:
         "event_chain",
         "event_file",
         "loaded_image",
-        "snapshot",
         "studio_dataset",
     ]
