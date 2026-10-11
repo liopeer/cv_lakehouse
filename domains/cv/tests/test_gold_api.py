@@ -107,8 +107,8 @@ def test_classes_are_the_class_registry(lake: CvLakeResource) -> None:
 
 
 def test_images_and_boxes_come_unfiltered(client: TestClient) -> None:
-    assert len(_rows(client=client, path="/v1/images")) == 9
-    assert len(_rows(client=client, path="/v1/boxes")) == 10
+    assert len(_rows(client=client, path="/v1/images")) == 16
+    assert len(_rows(client=client, path="/v1/boxes")) == 18
 
 
 @pytest.mark.parametrize(
@@ -117,11 +117,11 @@ def test_images_and_boxes_come_unfiltered(client: TestClient) -> None:
         ({"dataset": "pp4av"}, 3),
         ({"dataset": ["pp4av", "wider_face"]}, 5),
         ({"role": "test"}, 4),
-        ({"role": ["val", "test"]}, 8),
+        ({"role": ["val", "test"]}, 9),
         ({"split": "fisheye"}, 1),
         ({"dataset": "open_images", "role": "val"}, 3),
-        ({"class_name": "license_plate"}, 3),
-        ({"class_name": ["face", "other"]}, 7),
+        ({"class_name": "license_plate"}, 4),
+        ({"class_name": ["face", "other"]}, 9),
         ({"commercial_use": "true"}, 5),
         ({"dataset": "no_such_dataset"}, 0),
     ],
@@ -149,7 +149,7 @@ def test_paging_returns_every_box_once(client: TestClient) -> None:
         after = body["next_after"]
         if after is None:
             break
-    assert len(seen) == len(set(seen)) == 10
+    assert len(seen) == len(set(seen)) == 18
     assert seen == sorted(seen)
 
 
@@ -193,7 +193,7 @@ def test_a_box_with_no_vector_does_not_end_the_paging(
     ):
         table = pq.read_table(path)
         kept = [box_id != first for box_id in table.column("box_id").to_pylist()]
-        pq.write_table(table.filter(pa.array(kept)), path)
+        pq.write_table(table.filter(pa.array(kept, type=pa.bool_())), path)
 
     seen: list[str] = []
     after: str | None = None
@@ -246,7 +246,7 @@ def test_a_box_that_moved_after_its_vector_gets_none(
 
 def test_crop_embeddings_filter_by_class(client: TestClient) -> None:
     crops = _rows(client=client, path="/v1/crop_embeddings", class_name="face")
-    assert len(crops) == 6
+    assert len(crops) == 7
 
 
 def test_shards_split_the_images_by_a_fixed_rule(client: TestClient) -> None:

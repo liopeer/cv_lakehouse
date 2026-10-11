@@ -112,6 +112,15 @@ def test_silver_keeps_an_unnamed_class_as_other(tmp_path: Path) -> None:
     assert names == ["face", "license_plate", "other", "face", "face"]
 
 
+@pytest.mark.parametrize(
+    argnames="mid",
+    # Man, Woman, Boy and Girl, the children of Person in the class hierarchy.
+    argvalues=["/m/04yx4", "/m/03bt1vf", "/m/01bl7v", "/m/05r655"],
+)
+def test_every_child_of_person_maps_to_person(mid: str) -> None:
+    assert OpenImagesSource().spec.category_map[mid] == "person"
+
+
 def test_a_train_image_lives_in_the_shard_of_its_first_digit(tmp_path: Path) -> None:
     """The CVDF tars unpack train into train_0 to train_f."""
     images = list(

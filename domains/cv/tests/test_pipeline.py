@@ -323,6 +323,51 @@ def test_silver_checks_pass(
         assert all(evaluation.passed for evaluation in evaluations)
 
 
+def test_silver_of_an_annotation_only_source_reads_the_images_of_coco(
+    lake: CvLakeResource, bronze_sources: dict[str, Path]
+) -> None:
+    asset = silver_defs.build_silver_asset("lvis")
+    assert dg.AssetKey(["bronze", "coco"]) in asset.dependency_keys
+
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
+    materialize_assets(lake=lake, assets=[asset])
+    manifest = read_manifest(
+        path=lake.paths.silver_dir("lvis") / SILVER_MANIFEST, model=SilverManifest
+    )
+    assert manifest.image_roots == {
+        "train": str(bronze_sources["coco"]),
+        "val": str(bronze_sources["coco"]),
+    }
+
+
+def test_a_new_bronze_of_coco_makes_a_new_silver_of_lvis(
+    lake: CvLakeResource, bronze_sources: dict[str, Path], tmp_path: Path
+) -> None:
+    materialize_bronze_links(lake=lake, sources=bronze_sources)
+    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("lvis")])
+    first = read_manifest(
+        path=lake.paths.silver_dir("lvis") / SILVER_MANIFEST, model=SilverManifest
+    )
+
+    moved = tmp_path / "moved_coco"
+    shutil.copytree(bronze_sources["coco"], moved)
+    asset = build_bronze_asset(SOURCE_BY_NAME["coco"])
+    run_assets(
+        lake=lake,
+        assets=[asset],
+        run_config=dg.RunConfig(
+            ops={asset.op.name: {"config": {"source_dir": str(moved)}}}
+        ),
+    )
+    materialize_assets(lake=lake, assets=[silver_defs.build_silver_asset("lvis")])
+    second = read_manifest(
+        path=lake.paths.silver_dir("lvis") / SILVER_MANIFEST, model=SilverManifest
+    )
+
+    assert second.build_id != first.build_id
+    assert second.image_roots["train"] == str(moved)
+
+
 def test_silver_writes_parquet_a_plain_reader_can_open(
     lake: CvLakeResource, bronze_sources: dict[str, Path]
 ) -> None:

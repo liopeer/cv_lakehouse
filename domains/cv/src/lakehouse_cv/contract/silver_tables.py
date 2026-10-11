@@ -52,6 +52,7 @@ ATTRIBUTE_COLUMNS: tuple[pa.Field, ...] = (
     pa.field(name="attr_pose", type=pa.int32()),
     pa.field(name="attr_invalid", type=pa.bool_()),
     # Open Images marks a box that covers a crowd, and one that bounds a depiction.
+    # COCO marks a crowd box with iscrowd.
     pa.field(name="attr_is_group_of", type=pa.bool_()),
     pa.field(name="attr_is_depiction", type=pa.bool_()),
 )

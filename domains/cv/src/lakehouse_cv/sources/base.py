@@ -110,6 +110,39 @@ class BronzeSource(PublishedSource[CvBronzeManifest], Protocol):
         )
 
 
+@runtime_checkable
+class AnnotationOnlySource(BronzeSource, Protocol):
+    """A source that publishes annotations only, over the images of another source.
+
+    Bronze holds the annotations. Silver reads the images in the bronze of
+    `image_source_name`, and a file name in the labels is relative to that bronze.
+    """
+
+    image_source_name: str
+
+    def annotation_file(self, bronze_dir: UPath, split: str) -> UPath: ...
+
+    def image_root(self, bronze_dir: UPath, split: str) -> UPath:
+        raise TypeError(
+            f"{self.spec.name} has no images of its own. Silver reads them in "
+            f"bronze/{self.image_source_name}."
+        )
+
+    def describe_bronze_copy(
+        self, *, bronze_dir: UPath, base: BronzeManifest
+    ) -> CvBronzeManifest:
+        splits = [
+            split
+            for split in self.spec.splits
+            if self.annotation_file(bronze_dir=bronze_dir, split=split).is_file()
+        ]
+        if not splits:
+            raise RuntimeError(
+                f"No split materialized for {base.dataset} in {bronze_dir}"
+            )
+        return CvBronzeManifest(**base.model_dump(), splits=splits)
+
+
 def _join_location(location: str, relative: str) -> str:
     # An image root that is bronze itself is ".". S3 refuses a key with "/./" in it.
     return location if relative == "." else posixpath.join(location, relative)

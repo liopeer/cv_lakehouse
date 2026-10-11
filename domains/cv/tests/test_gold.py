@@ -80,6 +80,9 @@ def test_gold_unions_every_silver_dataset(silver_lake: CvLakeResource) -> None:
     assert all(check.passed for check in result.get_asset_check_evaluations())
 
     assert _query(lake=silver_lake, table="images", select="dataset, count(*)") == [
+        ("coco", 3),
+        ("coco_wholebody", 2),
+        ("lvis", 2),
         ("open_images", 3),
         ("pp4av", 2),
         ("wider_face", 4),
@@ -106,6 +109,12 @@ def test_gold_gives_every_row_the_role_of_its_split(
 ) -> None:
     _build(lake=silver_lake, built_at=FIRST_BUILD)
     assert _query(lake=silver_lake, table="images", select="dataset, split, role") == [
+        ("coco", "train", "train"),
+        ("coco", "val", "val"),
+        ("coco_wholebody", "train", "train"),
+        ("coco_wholebody", "val", "val"),
+        ("lvis", "train", "train"),
+        ("lvis", "val", "val"),
         ("open_images", "test", "test"),
         ("open_images", "train", "train"),
         ("open_images", "validation", "val"),
@@ -120,6 +129,11 @@ def test_gold_drops_every_flagged_box(silver_lake: CvLakeResource) -> None:
     _build(lake=silver_lake, built_at=FIRST_BUILD)
     counts = _query(lake=silver_lake, table="boxes", select="dataset, split, count(*)")
     assert counts == [
+        # Silver holds three. The crowd box drops out.
+        ("coco", "train", 2),
+        ("coco", "val", 1),
+        ("coco_wholebody", "train", 3),
+        ("lvis", "train", 2),
         # Silver holds five boxes here. The crowd box and the depiction drop out.
         ("open_images", "test", 1),
         ("open_images", "train", 1),
@@ -137,7 +151,7 @@ def test_gold_names_every_pixel_relative_to_the_lake_root(
 ) -> None:
     _build(lake=silver_lake, built_at=FIRST_BUILD)
     paths = _query(lake=silver_lake, table="images", select="image_path")
-    assert len(paths) == 9
+    assert len(paths) == 12
     assert all((silver_lake.paths.root / path).is_file() for (path,) in paths)
 
 

@@ -107,11 +107,17 @@ def test_a_release_holds_the_val_and_test_files_and_no_train_file(
 
     assert manifest.release == 1
     assert sorted(pinned.path for pinned in manifest.files) == [
+        "boxes/coco/val.parquet",
+        "boxes/coco_wholebody/val.parquet",
+        "boxes/lvis/val.parquet",
         "boxes/open_images/test.parquet",
         "boxes/open_images/validation.parquet",
         "boxes/pp4av/fisheye.parquet",
         "boxes/pp4av/test.parquet",
         "boxes/wider_face/val.parquet",
+        "images/coco/val.parquet",
+        "images/coco_wholebody/val.parquet",
+        "images/lvis/val.parquet",
         "images/open_images/test.parquet",
         "images/open_images/validation.parquet",
         "images/pp4av/fisheye.parquet",
@@ -227,7 +233,7 @@ def test_a_request_for_eval_rows_must_name_a_release(gold_lake: CvLakeResource) 
     # Train rows are those of the current gold, so they need no release.
     train = client.get(url="/v1/boxes", params={"role": "train"})
     assert train.status_code == 200
-    assert len(train.json()["rows"]) == 2
+    assert len(train.json()["rows"]) == 9
 
 
 def test_a_release_joins_the_train_rows_of_the_current_gold(
@@ -238,7 +244,7 @@ def test_a_release_joins_the_train_rows_of_the_current_gold(
 
     rows = client.get(url="/v1/boxes", params={"release": "1"}).json()["rows"]
 
-    assert len(rows) == 10
+    assert len(rows) == 18
     assert {row["role"] for row in rows} == {"train", "val", "test"}
 
 

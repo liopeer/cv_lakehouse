@@ -101,6 +101,9 @@ attribute:
 | wider_face | `attr_blur`, `attr_expression`, `attr_illumination`, `attr_occlusion`, `attr_pose`, `attr_invalid` |
 | open_images | `attr_is_group_of`, `attr_is_depiction` |
 | pp4av | none |
+| coco | `attr_is_group_of` |
+| lvis | none |
+| coco_wholebody | `attr_is_group_of`, on a person box |
 
 A box is keyed by `box_id`, an md5 of the dataset, the split, the file name and the box's
 position in the source, written as a UUID. A box that normalisation drops leaves every
@@ -227,6 +230,9 @@ pipeline, not for silver.
 | open_images | backbone, both classes | CC-BY-4.0 and CC-BY-2.0 | yes |
 | wider_face | face recall at small scale | CC-BY-NC-ND-4.0 | no |
 | pp4av | road driving evaluation only | CC-BY-NC-ND-4.0 | no |
+| coco | persons, at every scale and in crowds | CC-BY-4.0 annotations, a Flickr licence per image | no |
+| lvis | licence plates, persons, signs and screens on the COCO images | CC-BY-4.0 annotations, the COCO images | no |
+| coco_wholebody | faces and hands of the COCO persons | CC-BY-NC-4.0 annotations, the COCO images | no |
 
 `SilverManifest.commercial_use` carries each dataset's answer, so a consumer that mixes
 them can enforce its own licence rule.
@@ -251,6 +257,9 @@ a rebuild from the same silver gives the same rows.
 | open_images | train, validation, test | train, val, test |
 | wider_face | train, val | train, val |
 | pp4av | test, fisheye | test, test |
+| coco | train, val | train, val |
+| lvis | train, val | train, val |
+| coco_wholebody | train, val | train, val |
 
 Gold has no versions. A build writes a new directory under `gold/builds/`, named by a
 digest of the code version and the silver builds, and then replaces `_gold.json`, which
@@ -453,6 +462,9 @@ copy that already exists links in place of a download:
 | wider_face | the official page, which links to Hugging Face for the images | `WIDER_{train,val,test}/`, `wider_face_split/`, `eval_tools/`, `Submission_example/` |
 | pp4av | its Hugging Face repository, at a pinned commit | `README.md`, `pp4av.py`, `data/{images,annotations,soiling_annotations}/` |
 | open_images | every link on the V7 download page, and the CVDF image tars | `train_0/` to `train_f/`, `validation/`, `test/`, `challenge2018/`, and the CSVs |
+| coco | every 2017 link on the download page | `{train,val,test,unlabeled}2017/`, and a folder for each annotation zip |
+| lvis | every v1 link on the download page | a folder for each zip, such as `lvis_v1_train.json/` |
+| coco_wholebody | the two Google Drive links of its README | `coco_wholebody_{train,val}_v1.0.json` |
 
 PP4AV publishes two label sets. Its dataset card calls `annotations` the curated one and
 `soiling_annotations` the raw one, before filtering. Bronze holds both, and the reader
@@ -460,6 +472,18 @@ takes the curated one.
 
 Open Images is about 740 GB: 560 GB of image tars, 130 GB of narrative voice recordings,
 and the rest annotations.
+
+COCO is about 49 GB as archives, and twice that unpacked. The `license` field of each
+image names one of eight Flickr licences, and most of them forbid commercial use.
+
+LVIS and COCO-WholeBody publish annotations only. Their bronze holds the annotation
+files, and their silver reads the images in `bronze/coco`. A file name in their silver
+is relative to the bronze of COCO, such as `train2017/000000397133.jpg`, because an LVIS
+val image can be in `train2017`. Their silver depends on `bronze/coco`, so a new bronze
+of COCO makes a new build.
+
+COCO-WholeBody gives a face box only where `face_valid` is set. A face under about 10 px
+has no box, and neither has some larger face.
 
 ### Corrections
 
@@ -512,6 +536,10 @@ ops:
 2. Give it a `DatasetSpec` (`contract/dataset_spec.py`) that maps its category names onto canonical class names.
 3. Register it in `sources/source_registry.py`. Its bronze and silver assets then
    appear on their own.
+
+If the dataset publishes annotations only, over the images of another source, inherit
+`AnnotationOnlySource` instead. Set `image_source_name` to the source whose bronze holds
+the images, and name each image relative to that bronze. Silver then reads both.
 
 If the dataset publishes something per box that labelformat cannot carry, also inherit
 `BoxAttributeSource`, implement `read_raw_images`, and add the `attr_*` columns to

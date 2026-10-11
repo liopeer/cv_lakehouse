@@ -43,7 +43,7 @@ from lakehouse_cv.defs.corrections import (
     read_corrections_manifest,
 )
 from lakehouse_cv.defs.resources import CvLakeResource
-from lakehouse_cv.sources.base import read_raw_images
+from lakehouse_cv.sources.base import AnnotationOnlySource, read_raw_images
 from lakehouse_cv.sources.source_registry import SOURCE_BY_NAME
 from lakehouse_cv.transforms.correction_overlay import CorrectionOverlay
 from lakehouse_cv.transforms.layer_builds import (
@@ -80,10 +80,18 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
             spec.category_map_sha256_fingerprint,
         ]
     )
+    # A source that publishes annotations only reads its images in another bronze.
+    image_bronze_name = (
+        source.image_source_name if isinstance(source, AnnotationOnlySource) else None
+    )
+    bronze_names = [name] if image_bronze_name is None else [name, image_bronze_name]
 
     @dg.asset(
         key=dg.AssetKey(["silver", name]),
-        deps=[dg.AssetKey(["bronze", name]), build_corrections_key(name)],
+        deps=[
+            *(dg.AssetKey(["bronze", bronze_name]) for bronze_name in bronze_names),
+            build_corrections_key(name),
+        ],
         group_name="silver",
         kinds={"silver", "parquet"},
         code_version=code_version,
@@ -104,9 +112,20 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
     def _silver(
         context: dg.AssetExecutionContext, lake: CvLakeResource
     ) -> dg.MaterializeResult:
-        bronze_path = lake.paths.bronze_dir(name) / BRONZE_MANIFEST
-        bronze = read_manifest(path=bronze_path, model=CvBronzeManifest)
+        bronze_paths = [
+            lake.paths.bronze_dir(bronze_name) / BRONZE_MANIFEST
+            for bronze_name in bronze_names
+        ]
+        bronze = read_manifest(path=bronze_paths[0], model=CvBronzeManifest)
         bronze_dir = lake.store.resolve(bronze.path)
+        image_roots = bronze.image_roots
+        if image_bronze_name is not None:
+            image_bronze = read_manifest(
+                path=lake.paths.bronze_dir(image_bronze_name) / BRONZE_MANIFEST,
+                model=CvBronzeManifest,
+            )
+            # A file name of such a source is relative to the bronze with the images.
+            image_roots = {split: image_bronze.path for split in bronze.splits}
         silver_dir = lake.paths.silver_dir(name)
         corrections = read_corrections_manifest(paths=lake.paths, name=name)
         # Bronze pins every file it names, and an event file never changes, so the
@@ -114,7 +133,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
         build_id = derive_build_id(
             [
                 code_version,
-                bronze_path.read_text(),
+                *(bronze_path.read_text() for bronze_path in bronze_paths),
                 *(
                     f"{event_file.chain_id}/{event_file.event_file_id}"
                     for event_file in corrections.event_files
@@ -201,7 +220,7 @@ def build_silver_asset(name: str) -> dg.AssetsDefinition:
                 build_id=build_id,
                 license=spec.license,
                 commercial_use=spec.commercial_use,
-                image_roots=bronze.image_roots,
+                image_roots=image_roots,
                 splits=list(bronze.splits),
                 last_event=corrections.last_event,
             ),
