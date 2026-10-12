@@ -719,6 +719,20 @@ wheels = [
 ]
 
 [[package]]
+name = "dagster-k8s"
+version = "0.29.21"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dagster" },
+    { name = "google-auth" },
+    { name = "kubernetes" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d2/76/e6690525378c1a06de6ac1db20453dde74f28eaa054634afe5eb1e0b6377/dagster_k8s-0.29.21.tar.gz", hash = "sha256:efd2baf42112ce3d0ee1ee1dea91d9453987011c97604617073d15021501d465", size = 310654, upload-time = "2026-09-03T19:29:44.424Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/74/e7edb9ab01261f71420b29707124ac6012417d27e2c018f986329e751e83/dagster_k8s-0.29.21-py3-none-any.whl", hash = "sha256:fe4f5cc7900f65b0dbc978e0d99fa91228d6bb98475f9aea81feeb8e302cb122", size = 57799, upload-time = "2026-09-03T19:29:43.131Z" },
+]
+
+[[package]]
 name = "dagster-pipes"
 version = "1.13.21"
 source = { registry = "https://pypi.org/simple" }
@@ -855,6 +869,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/6c/c9/b620cf76624e9ee17e8556f2a021f129ce5fa86648b327cbfa269ceedbb8/duckdb_engine-0.16.0.tar.gz", hash = "sha256:dd7b67a5d8a00e3dfb678b46464c0936ac4163f9d56f25ea1bed5b2aa8cbdc2a", size = 47639, upload-time = "2025-03-29T04:54:01.065Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4e/5a/87a0933e7b9709e913e5c9c4c26a27f3f59d9a3ef64099f84ead5b689a1f/duckdb_engine-0.16.0-py3-none-any.whl", hash = "sha256:bf44119915b024bcf78d9450b4f697298a6c6cd7be586ffcb899df5e67f7d2ce", size = 49397, upload-time = "2025-03-29T04:53:59.361Z" },
+]
+
+[[package]]
+name = "durationpy"
+version = "0.11"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/5d/5f8571bd5dedc80863191621ac4be001f3f3dd8315d2ec078705dab7dec1/durationpy-0.11.tar.gz", hash = "sha256:181898e1ae282e288f0a2291829656bf1b6b3aadf30a97993b85db4943642905", size = 3582, upload-time = "2026-08-26T13:56:00.991Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/c4/ebdf7837bc4ef6fd98cfb013c28855bb358467bf86c1af011bbc21e21df0/durationpy-0.11-py3-none-any.whl", hash = "sha256:a739fe2b8972c250ff72f8e2c488d18cf25f7b852f49ee76048775d5171df30c", size = 4133, upload-time = "2026-08-26T13:55:59.456Z" },
 ]
 
 [[package]]
@@ -1570,6 +1593,27 @@ wheels = [
 ]
 
 [[package]]
+name = "kubernetes"
+version = "36.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "durationpy" },
+    { name = "python-dateutil" },
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "requests-oauthlib" },
+    { name = "six" },
+    { name = "urllib3" },
+    { name = "websocket-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ca/57/b07b96353f902aa1bdbe00e878e3a12a137977d03a962479785576aa8ec9/kubernetes-36.0.3.tar.gz", hash = "sha256:36993ed25ce59b789c9341473a228fcf268504a2fec7c2b2b1531d73072e5ce7", size = 2337528, upload-time = "2026-07-13T20:38:12.128Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/30/a96d47df739689ac0001ade0afefc16e3b477fc2fb426b568515fdc8afce/kubernetes-36.0.3-py2.py3-none-any.whl", hash = "sha256:8fde9241c4b298e6374a069dcf728359b4e72c2fb29489a975ba4e1c047cf10f", size = 4618066, upload-time = "2026-07-13T20:38:10.172Z" },
+]
+
+[[package]]
 name = "labelformat"
 version = "0.1.17"
 source = { registry = "https://pypi.org/simple" }
@@ -1627,6 +1671,7 @@ source = { editable = "domains/cv" }
 dependencies = [
     { name = "dagster" },
     { name = "dagster-aws" },
+    { name = "dagster-k8s" },
     { name = "dagster-postgres" },
     { name = "dagster-webserver" },
     { name = "duckdb" },
@@ -1646,6 +1691,7 @@ dependencies = [
 requires-dist = [
     { name = "dagster", specifier = "==1.13.21" },
     { name = "dagster-aws", specifier = "==0.29.21" },
+    { name = "dagster-k8s", specifier = "==0.29.21" },
     { name = "dagster-postgres", specifier = "==0.29.21" },
     { name = "dagster-webserver", specifier = "==1.13.21" },
     { name = "duckdb", specifier = ">=1.2.2,<1.6" },
@@ -3344,6 +3390,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/36/57/ed58088fafdf4c55a0ad6bde846502567645424d7ebf325230b9237f4085/wcwidth-0.8.3.tar.gz", hash = "sha256:d128512515fbf4612e0ff21fd6380399210318b7b54a9af59dff8454cf9730eb", size = 1458450, upload-time = "2026-08-28T18:10:06.875Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/0e/57f6bb3024a597b2e8ec4aee710ffe62ddc95af2e2bb1ee7a7abdc22c68c/wcwidth-0.8.3-py3-none-any.whl", hash = "sha256:d5b73dba6158a595ec9370350e7f2637bcac8d6c5e4fde34f30fcffb6103a5e4", size = 331669, upload-time = "2026-08-28T18:10:04.909Z" },
+]
+
+[[package]]
+name = "websocket-client"
+version = "1.9.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/cb/a5abcc2891249f393827c650c6296660ce40374ac22d99ab9aea41f9d2a2/websocket_client-1.9.2.tar.gz", hash = "sha256:0fcb57545848be86992e128218fd96dd87a6769ffdb1a968dff79632b85604d0", size = 84110, upload-time = "2026-08-31T14:08:40.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/d2/cc4dc1271e464942db7ee278baae2daa99ee77cb2af744025c04da585a3e/websocket_client-1.9.2-py3-none-any.whl", hash = "sha256:e1a673830a9c7bfa47b1cd3d5e4178f4c9651d80a4eab02c9c23a1c3ec6250ce", size = 95786, upload-time = "2026-08-31T14:08:39.899Z" },
 ]
 
 [[package]]
