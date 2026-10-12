@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/liopeer/cv_lakehouse/compare/v0.9.0...v0.10.0) (2026-10-12)
+
+
+### Features
+
+* ship dagster-k8s, so a run on kubernetes is its own job ([#77](https://github.com/liopeer/cv_lakehouse/issues/77)) ([33c61a0](https://github.com/liopeer/cv_lakehouse/commit/33c61a0472d11f9596ec0bbbe9e14eb30f6f36e5))
+
 ## [0.9.0](https://github.com/liopeer/cv_lakehouse/compare/v0.8.0...v0.9.0) (2026-10-11)
 
 
