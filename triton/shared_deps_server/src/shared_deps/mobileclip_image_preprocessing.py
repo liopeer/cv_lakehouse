@@ -99,14 +99,18 @@ def crop_image(*, image: torch.Tensor, crop_box: CropBox) -> torch.Tensor:
 def _crop_edges(
     *, crop_box: CropBox, width: int, height: int
 ) -> tuple[int, int, int, int]:
-    """Returns the edges `(left, top, right, bottom)` of the crop inside the image."""
+    """Returns the edges `(left, top, right, bottom)` of the crop inside the image.
+
+    A crop that misses the image keeps the nearest pixel, as the resize divides by the
+    shorter side.
+    """
     x, y, crop_width, crop_height = crop_box
     if crop_width < 0:
         return 0, 0, width, height
-    left = min(max(x, 0), width)
-    top = min(max(y, 0), height)
-    right = min(max(x + crop_width, left), width)
-    bottom = min(max(y + crop_height, top), height)
+    left = min(max(x, 0), width - 1)
+    top = min(max(y, 0), height - 1)
+    right = min(max(x + crop_width, left + 1), width)
+    bottom = min(max(y + crop_height, top + 1), height)
     return left, top, right, bottom
 
 

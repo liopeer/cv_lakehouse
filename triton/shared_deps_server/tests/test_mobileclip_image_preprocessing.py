@@ -137,6 +137,23 @@ class TestCropImage:
         assert crop_image(image=image, crop_box=(25, 15, 10, 10)).shape == (3, 5, 5)
         assert crop_image(image=image, crop_box=(-5, -5, 10, 10)).shape == (3, 5, 5)
 
+    @pytest.mark.parametrize(
+        "crop_box", [(30, 5, 1, 1), (5, 20, 1, 1), (-3, -3, 2, 2), (5, 5, 0, 0)]
+    )
+    def test_keeps_one_pixel_of_a_crop_that_misses_the_image(self, crop_box):
+        image = torch.zeros(3, 20, 30)
+
+        assert crop_image(image=image, crop_box=crop_box).shape == (3, 1, 1)
+
+
+class TestPreprocessCropsAtTheBorder:
+    def test_preprocesses_a_crop_past_the_last_pixel(self):
+        encoded = _encode_image(width=640, height=480, image_format="JPEG")
+
+        (crop,) = preprocess_crops(encoded, [(640, 457, 1, 1)])
+
+        assert crop.shape == (3, IMAGE_SIZE, IMAGE_SIZE)
+
 
 class TestMatchesThePilPreprocessor:
     @pytest.mark.parametrize(
