@@ -151,8 +151,20 @@ def test_a_crop_rounds_half_to_even_and_names_at_least_one_pixel(
     _write(tmp_path, embedder, table=CROP_VECTORS)
 
     rectangles = {(crop.x, crop.y, crop.width, crop.height) for crop in embedder.crops}
-    assert rectangles == {(10, 11, 6, 1), (2, 4, 1, 2)}
-    assert Crop(path="/lake/00.jpg", x=10, y=11, width=6, height=1) in embedder.crops
+    assert rectangles == {(10, 10, 6, 1), (2, 4, 1, 2)}
+    assert Crop(path="/lake/00.jpg", x=10, y=10, width=6, height=1) in embedder.crops
+
+
+def test_a_sliver_at_the_border_keeps_its_crop_on_the_image(tmp_path: Path) -> None:
+    _write_silver(
+        tmp_path, boxes=[(99.74, 50.0, 0.26, 1.24), (49.78, 99.71, 0.36, 0.29)]
+    )
+    embedder = FakeEmbedder()
+
+    _write(tmp_path, embedder, table=CROP_VECTORS)
+
+    rectangles = {(crop.x, crop.y, crop.width, crop.height) for crop in embedder.crops}
+    assert rectangles == {(99, 50, 1, 1), (50, 99, 1, 1)}
 
 
 def test_a_second_run_embeds_nothing(tmp_path: Path) -> None:

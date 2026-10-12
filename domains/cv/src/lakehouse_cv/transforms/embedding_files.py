@@ -132,10 +132,12 @@ IMAGE_VECTORS = VectorTable(
 
 # The box on the pixel grid, from a silver or a gold box row. `round_even` rounds half
 # to even, as Python's `round` does. A box under half a pixel still names one pixel, so
-# the crop on the server has an area.
+# the crop on the server has an area. A crop starts no later than the last pixel of its
+# box. Rounding otherwise moves a sliver at the image border off the image, and the
+# server then crops nothing.
 CROP_SQL = """
-round_even(x, 0)::integer as crop_x,
-round_even(y, 0)::integer as crop_y,
+least(round_even(x, 0), ceil(x + w) - 1)::integer as crop_x,
+least(round_even(y, 0), ceil(y + h) - 1)::integer as crop_y,
 greatest(1, round_even(w, 0))::integer as crop_width,
 greatest(1, round_even(h, 0))::integer as crop_height
 """
