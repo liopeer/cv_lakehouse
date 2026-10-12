@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.4.1...triton-v0.4.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **triton:** keep one pixel of a crop that misses the image ([#79](https://github.com/liopeer/cv_lakehouse/issues/79)) ([2218057](https://github.com/liopeer/cv_lakehouse/commit/221805728690cccf26e29c4028f22ba935ba5631))
+
 ## [0.4.1](https://github.com/liopeer/cv_lakehouse/compare/triton-v0.4.0...triton-v0.4.1) (2026-10-09)
 
 
