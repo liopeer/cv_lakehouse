@@ -7,6 +7,7 @@
 # Dagster resolves the resource annotations at runtime, so this module must not
 # postpone its annotations.
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import dagster as dg
@@ -33,15 +34,18 @@ def build_eval_release_asset() -> dg.AssetsDefinition:
         group_name="gold",
         kinds={"gold", "parquet"},
         description=(
-            "A frozen copy of the val and test rows of gold. Every run publishes the "
-            "next number, and no run changes an earlier one. Run it by hand, when a "
-            "round of corrections is done."
+            "A frozen copy of the val and test rows of gold. A run publishes the next "
+            "number, and no run changes an earlier one. A run skips when the rows are "
+            "those of the last release. Run it by hand, when a round of corrections "
+            "is done."
         ),
         metadata=build_table_schema_metadata(STORED_GOLD_TABLES),
+        # A gold with the eval rows of the last release skips the step. See ADR 0017.
+        output_required=False,
     )
     def _eval_release(
         context: dg.AssetExecutionContext, lake: CvLakeResource
-    ) -> dg.MaterializeResult:
+    ) -> Iterator[dg.MaterializeResult]:
         try:
             manifest = write_eval_release(
                 paths=lake.paths,
@@ -49,8 +53,9 @@ def build_eval_release_asset() -> dg.AssetsDefinition:
                 created_at=datetime.now(tz=UTC),
             )
         except IdenticalReleaseError as error:
-            raise dg.Failure(description=str(error)) from error
-        return dg.MaterializeResult(
+            context.log.info(str(error))
+            return
+        yield dg.MaterializeResult(
             metadata={
                 "release": manifest.release,
                 "gold_build_id": manifest.gold_build_id,
