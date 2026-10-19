@@ -34,6 +34,8 @@ class CvLakeResource(LakeResource):
             download_workers=settings.download_workers,
             request_timeout_seconds=settings.request_timeout_seconds,
             disk_lease_path=settings.disk_lease_path,
+            duckdb_threads=settings.duckdb_threads,
+            duckdb_memory_limit=settings.duckdb_memory_limit,
             triton_url=settings.triton_url,
             studio_export_url=settings.studio_export_url,
         )
