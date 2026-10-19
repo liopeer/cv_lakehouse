@@ -10,6 +10,9 @@ answers a question across datasets.
 
 Gold holds no flagged box. Silver keeps a crowd box, a depiction and a region the
 annotators rejected, and gold is where they drop out.
+
+Gold holds only the boxes of the target classes, and only the images that hold one of
+them. Silver keeps every class. See ADR 0018.
 """
 
 from __future__ import annotations
@@ -18,10 +21,16 @@ import pyarrow as pa
 from upath import UPath
 
 from lakehouse_core.table_spec import Layer, TableSpec
+from lakehouse_cv.contract.class_registry import CanonicalClass
 from lakehouse_cv.contract.silver_tables import ATTRIBUTE_COLUMNS, EMBEDDING_COLUMN
 
 # A box with one of these set is not in gold, so gold has no column for them.
 FLAG_COLUMNS = ("attr_is_group_of", "attr_is_depiction", "attr_invalid")
+
+# A new class of the registry is a target class, unless it is `other`.
+TARGET_CLASS_NAMES = CanonicalClass.all_class_names() - {
+    CanonicalClass.OTHER.class_name
+}
 
 GOLD_IMAGE_SCHEMA = pa.schema(
     [
@@ -82,14 +91,14 @@ GOLD_TABLES: tuple[TableSpec, ...] = (
         layer=Layer.GOLD,
         schema=GOLD_IMAGE_SCHEMA,
         key=("image_id",),
-        description="One row per image of every dataset, with its role and licence.",
+        description="One row per image with a box of gold, with its role and licence.",
     ),
     TableSpec(
         name="boxes",
         layer=Layer.GOLD,
         schema=GOLD_BOX_SCHEMA,
         key=("box_id",),
-        description="One row per box that gold keeps. No flagged box is here.",
+        description="One row per box of a target class. No flagged box is here.",
     ),
     TableSpec(
         name="embeddings",

@@ -79,15 +79,16 @@ def test_gold_unions_every_silver_dataset(silver_lake: CvLakeResource) -> None:
     )
     assert all(check.passed for check in result.get_asset_check_evaluations())
 
+    # An image with no box of a target class drops out.
     assert _query(lake=silver_lake, table="images", select="dataset, count(*)") == [
-        ("coco", 3),
-        ("coco_wholebody", 2),
-        ("hiertext", 3),
-        ("lvis", 2),
+        ("coco", 2),
+        ("coco_wholebody", 1),
+        ("hiertext", 2),
+        ("lvis", 1),
         ("open_images", 3),
         ("pp4av", 2),
-        ("textocr", 3),
-        ("wider_face", 4),
+        ("textocr", 1),
+        ("wider_face", 2),
     ]
 
 
@@ -114,19 +115,15 @@ def test_gold_gives_every_row_the_role_of_its_split(
         ("coco", "train", "train"),
         ("coco", "val", "val"),
         ("coco_wholebody", "train", "train"),
-        ("coco_wholebody", "val", "val"),
         ("hiertext", "test", "test"),
         ("hiertext", "train", "train"),
-        ("hiertext", "validation", "val"),
         ("lvis", "train", "train"),
-        ("lvis", "val", "val"),
         ("open_images", "test", "test"),
         ("open_images", "train", "train"),
         ("open_images", "validation", "val"),
         ("pp4av", "fisheye", "test"),
         ("pp4av", "test", "test"),
         ("textocr", "train", "train"),
-        ("textocr", "val", "val"),
         ("wider_face", "train", "train"),
         ("wider_face", "val", "val"),
     ]
@@ -136,18 +133,19 @@ def test_gold_drops_every_flagged_box(silver_lake: CvLakeResource) -> None:
     _build(lake=silver_lake, built_at=FIRST_BUILD)
     counts = _query(lake=silver_lake, table="boxes", select="dataset, split, count(*)")
     assert counts == [
-        # Silver holds three. The crowd box drops out.
-        ("coco", "train", 2),
+        # Silver holds three. The crowd box and the cat, an `other` box, drop out.
+        ("coco", "train", 1),
         ("coco", "val", 1),
         ("coco_wholebody", "train", 3),
         # A word that no one can read is no flag, so gold keeps it.
         ("hiertext", "test", 1),
         ("hiertext", "train", 2),
         ("lvis", "train", 2),
-        # Silver holds five boxes here. The crowd box and the depiction drop out.
         ("open_images", "test", 1),
         ("open_images", "train", 1),
-        ("open_images", "validation", 3),
+        # Silver holds five boxes here. The crowd box, the depiction and the `other`
+        # box drop out.
+        ("open_images", "validation", 2),
         ("pp4av", "fisheye", 1),
         ("pp4av", "test", 2),
         ("textocr", "train", 2),
@@ -162,7 +160,8 @@ def test_gold_names_every_pixel_relative_to_the_lake_root(
 ) -> None:
     _build(lake=silver_lake, built_at=FIRST_BUILD)
     paths = _query(lake=silver_lake, table="images", select="image_path")
-    assert len(paths) == 18
+    # Fourteen images. Lvis and coco_wholebody share a pixel file with coco.
+    assert len(paths) == 12
     assert all((silver_lake.paths.root / path).is_file() for (path,) in paths)
 
 

@@ -22,7 +22,7 @@ from lakehouse_cv.transforms.gold_build import build_gold, read_gold_manifest
 GOLD_KEY = dg.AssetKey(["gold", "current"])
 
 # Bump this when the gold rules change, such as which boxes drop out.
-GOLD_LOGIC_VERSION = "3"
+GOLD_LOGIC_VERSION = "4"
 
 
 class GoldConfig(dg.Config):
