@@ -24,11 +24,16 @@ class LakeResource(dg.ConfigurableResource):
     download_workers: int
     request_timeout_seconds: float
     disk_lease_path: str | None = None
+    duckdb_threads: int | None = None
+    duckdb_memory_limit: str | None = None
 
     @property
     def store(self) -> LakeStore:
         return LakeStore(
-            root=self.root, storage_options=json.loads(self.storage_options)
+            root=self.root,
+            storage_options=json.loads(self.storage_options),
+            duckdb_threads=self.duckdb_threads,
+            duckdb_memory_limit=self.duckdb_memory_limit,
         )
 
     @property
