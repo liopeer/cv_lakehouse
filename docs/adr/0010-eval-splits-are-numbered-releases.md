@@ -4,7 +4,7 @@ Copyright (c) 2025–2026 Lionel Peer
 -->
 # ADR 0010: Eval splits are frozen as numbered releases
 
-- Status: accepted
+- Status: superseded by 0017
 - Date: 2026-10-03
 
 ## Context

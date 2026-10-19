@@ -34,7 +34,6 @@ from tests.lake_runs import (
     materialize_assets,
     materialize_bronze_links,
     read_silver_build_ids,
-    run_assets,
 )
 
 SPECS = [source.spec for source in SOURCE_BY_NAME.values()]
@@ -194,7 +193,7 @@ def test_a_release_file_that_changed_is_reported(gold_lake: CvLakeResource) -> N
     ]
 
 
-def test_the_asset_publishes_a_release_and_refuses_an_equal_one(
+def test_the_asset_publishes_a_release_and_skips_an_equal_one(
     gold_lake: CvLakeResource,
 ) -> None:
     assets = [
@@ -207,8 +206,9 @@ def test_the_asset_publishes_a_release_and_refuses_an_equal_one(
     (check,) = result.get_asset_check_evaluations()
     assert check.passed
     assert list_release_numbers(gold_lake.paths) == [1]
-    again = run_assets(assets=assets, lake=gold_lake, raise_on_error=False)
-    assert not again.success
+    again = materialize_assets(lake=gold_lake, assets=assets)
+    events = again.get_asset_materialization_events()
+    assert [event.asset_key for event in events] == [gold_defs.GOLD_KEY]
     assert list_release_numbers(gold_lake.paths) == [1]
 
 
