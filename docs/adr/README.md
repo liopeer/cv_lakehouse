@@ -50,3 +50,4 @@ An ADR records one decision about the architecture, and the reason for it.
 | [0015](0015-every-asset-is-a-pure-function.md) | Every asset is a pure function of its inputs |
 | [0016](0016-a-run-is-a-kubernetes-job.md) | A run on Kubernetes is a Kubernetes job |
 | [0017](0017-an-equal-eval-release-is-skipped.md) | An eval release with the files of the last one is skipped |
+| [0018](0018-gold-holds-the-target-classes.md) | Gold holds only the target classes |

@@ -107,8 +107,8 @@ def test_classes_are_the_class_registry(lake: CvLakeResource) -> None:
 
 
 def test_images_and_boxes_come_unfiltered(client: TestClient) -> None:
-    assert len(_rows(client=client, path="/v1/images")) == 22
-    assert len(_rows(client=client, path="/v1/boxes")) == 23
+    assert len(_rows(client=client, path="/v1/images")) == 14
+    assert len(_rows(client=client, path="/v1/boxes")) == 21
 
 
 @pytest.mark.parametrize(
@@ -117,12 +117,13 @@ def test_images_and_boxes_come_unfiltered(client: TestClient) -> None:
         ({"dataset": "pp4av"}, 3),
         ({"dataset": ["pp4av", "wider_face"]}, 5),
         ({"role": "test"}, 5),
-        ({"role": ["val", "test"]}, 10),
+        ({"role": ["val", "test"]}, 9),
         ({"split": "fisheye"}, 1),
-        ({"dataset": "open_images", "role": "val"}, 3),
+        ({"dataset": "open_images", "role": "val"}, 2),
         ({"class_name": "license_plate"}, 4),
-        ({"class_name": ["face", "other"]}, 9),
-        ({"commercial_use": "true"}, 10),
+        # Gold holds no `other` box.
+        ({"class_name": ["face", "other"]}, 7),
+        ({"commercial_use": "true"}, 9),
         ({"dataset": "no_such_dataset"}, 0),
     ],
 )
@@ -149,7 +150,7 @@ def test_paging_returns_every_box_once(client: TestClient) -> None:
         after = body["next_after"]
         if after is None:
             break
-    assert len(seen) == len(set(seen)) == 23
+    assert len(seen) == len(set(seen)) == 21
     assert seen == sorted(seen)
 
 

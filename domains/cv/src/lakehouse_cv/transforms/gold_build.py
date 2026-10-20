@@ -5,8 +5,9 @@
 """Build gold from the current silver build of each dataset.
 
 Gold is the union of the silver datasets, with the role columns, and without the
-flagged boxes. Nothing else: a build reads no earlier gold, so a rebuild from the same
-silver gives the same rows.
+flagged boxes. It holds the boxes of the target classes, and the images that hold one.
+Nothing else: a build reads no earlier gold, so a rebuild from the same silver gives the
+same rows.
 
 A build never touches the build a reader has open. It writes a new directory, then
 replaces the manifest that points at it, then removes the builds nothing points at. The
@@ -33,6 +34,7 @@ from lakehouse_cv.contract.gold_tables import (
     FLAG_COLUMNS,
     GOLD_BOX_SCHEMA,
     GOLD_IMAGE_SCHEMA,
+    TARGET_CLASS_NAMES,
     gold_boxes_file,
     gold_images_file,
 )
@@ -56,6 +58,17 @@ from lakehouse_cv.transforms.layer_builds import (
     silver_build_dir,
 )
 
+_BOX_ROWS = f"""
+select
+    {IMAGE_ID_SQL} as image_id,
+    cast($role as varchar) as role,
+    cast($commercial_use as boolean) as commercial_use,
+    *
+from read_parquet($silver_boxes)
+where list_contains($class_names, class_name)
+  and not ({" or ".join(f"coalesce({name}, false)" for name in FLAG_COLUMNS)})
+"""
+
 _IMAGE_ROWS = f"""
 select
     {IMAGE_ID_SQL} as image_id,
@@ -64,17 +77,8 @@ select
     cast($license as varchar) as license,
     cast($commercial_use as boolean) as commercial_use,
     *
-from read_parquet($silver)
-"""
-
-_BOX_ROWS = f"""
-select
-    {IMAGE_ID_SQL} as image_id,
-    cast($role as varchar) as role,
-    cast($commercial_use as boolean) as commercial_use,
-    *
-from read_parquet($silver)
-where not ({" or ".join(f"coalesce({name}, false)" for name in FLAG_COLUMNS)})
+from read_parquet($silver_images)
+where file_name in (select file_name from ({_BOX_ROWS}))
 """
 
 
@@ -142,16 +146,20 @@ def build_gold(
                     image_root=store.location(store.resolve(silver.image_roots[split])),
                 )
                 splits.append(gold_split)
-                constants = {
+                constants: dict[str, object] = {
                     "role": gold_split.role.value,
                     "commercial_use": silver.commercial_use,
+                    "class_names": sorted(TARGET_CLASS_NAMES),
+                    "silver_boxes": str(boxes_file(build_dir=silver_dir, split=split)),
                 }
                 num_images += _write_rows(
                     connection=connection,
                     rows=_IMAGE_ROWS,
                     parameters={
                         **constants,
-                        "silver": str(images_file(build_dir=silver_dir, split=split)),
+                        "silver_images": str(
+                            images_file(build_dir=silver_dir, split=split)
+                        ),
                         "image_root": gold_split.image_root,
                         "license": silver.license,
                     },
@@ -163,10 +171,7 @@ def build_gold(
                 num_boxes += _write_rows(
                     connection=connection,
                     rows=_BOX_ROWS,
-                    parameters={
-                        **constants,
-                        "silver": str(boxes_file(build_dir=silver_dir, split=split)),
-                    },
+                    parameters=constants,
                     schema=GOLD_BOX_SCHEMA,
                     path=gold_boxes_file(
                         build_dir=gold_dir, dataset=spec.name, split=split

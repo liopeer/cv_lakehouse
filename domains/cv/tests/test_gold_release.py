@@ -239,7 +239,7 @@ def test_a_request_for_eval_rows_must_name_a_release(gold_lake: CvLakeResource) 
     # Train rows are those of the current gold, so they need no release.
     train = client.get(url="/v1/boxes", params={"role": "train"})
     assert train.status_code == 200
-    assert len(train.json()["rows"]) == 13
+    assert len(train.json()["rows"]) == 12
 
 
 def test_a_release_joins_the_train_rows_of_the_current_gold(
@@ -250,7 +250,7 @@ def test_a_release_joins_the_train_rows_of_the_current_gold(
 
     rows = client.get(url="/v1/boxes", params={"release": "1"}).json()["rows"]
 
-    assert len(rows) == 23
+    assert len(rows) == 21
     assert {row["role"] for row in rows} == {"train", "val", "test"}
 
 

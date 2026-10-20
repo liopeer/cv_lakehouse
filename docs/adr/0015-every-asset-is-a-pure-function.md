@@ -4,7 +4,7 @@ Copyright (c) 2025–2026 Lionel Peer
 -->
 # ADR 0015: Every asset is a pure function of its inputs
 
-- Status: accepted
+- Status: accepted. Rule 1 is superseded by 0018.
 - Date: 2026-10-10
 
 ## Context
