@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.11.0](https://github.com/liopeer/cv_lakehouse/compare/v0.10.0...v0.11.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cv:** keep only the target classes in gold ([#86](https://github.com/liopeer/cv_lakehouse/issues/86))
+
+### Features
+
+* **cv:** keep only the target classes in gold ([#86](https://github.com/liopeer/cv_lakehouse/issues/86)) ([a061098](https://github.com/liopeer/cv_lakehouse/commit/a0610981950cf27145542df1ce2b87a8637bb96c))
+
+
+### Bug Fixes
+
+* apply the duckdb thread and memory limits in dagster runs ([#82](https://github.com/liopeer/cv_lakehouse/issues/82)) ([2358dac](https://github.com/liopeer/cv_lakehouse/commit/2358dace08ddfeb9bd119006fd435e11ecb95c53))
+* **cv:** skip an eval release with the files of the last one ([#84](https://github.com/liopeer/cv_lakehouse/issues/84)) ([b6d2ceb](https://github.com/liopeer/cv_lakehouse/commit/b6d2cebf882ff43ec8a445a6226c2aded129d903))
+
 ## [0.10.0](https://github.com/liopeer/cv_lakehouse/compare/v0.9.0...v0.10.0) (2026-10-12)
 
 
